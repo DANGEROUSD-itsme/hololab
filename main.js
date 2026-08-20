@@ -650,7 +650,7 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "s" || e.key === "S") takeScreenshot();
   else if (e.key === "f" || e.key === "F") toggleFullscreen();
   else if (e.key === "m" || e.key === "M") { audio.toggleMuted(); updateMuteBtn(); }
-  else if (e.key === "c" || e.key === "C") cycleTheme("up");
+  else if (e.key === "c" || e.key === "C") cycleTheme(e.shiftKey ? "down" : "up");
   else if (e.key === "r" || e.key === "R") { startResetTween(false); toast("RESET"); audio.thud(); }
 });
 
@@ -691,6 +691,7 @@ let lastHandSeenAt = performance.now() / 1000;
 let cachedPoses = [];
 let lastDetectAt = 0;
 let wasPinchingAny = false;
+let wasBraking = false;
 
 // FPS tracking
 let fpsFrames = 0;
@@ -745,6 +746,18 @@ function animate() {
 
     const events = gestureEngine.update(poses, now);
 
+    if (events.brake) {
+      // instant stop the moment a fist forms - "grabbing" the hologram halts
+      // it immediately, rather than waiting out the momentum decay
+      angularVel = { x: 0, y: 0 };
+      panVel = { x: 0, y: 0 };
+      if (!wasBraking) {
+        toast("GRABBED — HELD STILL");
+        audio.blip();
+      }
+    }
+    wasBraking = events.brake;
+
     if (events.rotateDelta) {
       angularVel = { x: events.rotateDelta.dy, y: events.rotateDelta.dx };
     }
@@ -763,9 +776,6 @@ function animate() {
     }
     if (events.swipeVertical) {
       toggleHud();
-    }
-    if (events.colorCycle) {
-      cycleTheme(events.colorCycle);
     }
     if (events.ping) {
       spawnPingBurst();

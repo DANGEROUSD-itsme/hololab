@@ -126,34 +126,6 @@ check("open palm is not a pinch", classifyHandPose(openPalmLm).pinching === fals
 
 console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} TEST(S) FAILED`);
 
-// ---------- thumb tick (color cycle) ----------
-{
-  const engine = new GestureEngine(CONFIG);
-  const thumbUp = makeHand({ thumbExt: true, wristY: 0.5 }); // tip above wrist -> "up"
-  const ev = engine.update([classifyHandPose(thumbUp)], 0.0);
-  check("thumb-only pose fires colorCycle", ev.colorCycle === "up");
-}
-{
-  // thumb down: build a genuinely straight thumb (for the new angle-based
-  // check) that points below the wrist, rather than just moving the tip.
-  const wristX = 0.5, wristY = 0.5;
-  const lm = makeHand({ wristX, wristY, thumbExt: false }); // other fingers curled
-  lm[3] = { x: wristX - 0.06, y: wristY + 0.02, z: 0 };   // IP: just below-left of wrist
-  lm[4] = { x: wristX - 0.14, y: wristY + 0.10, z: 0 };   // TIP: further below-left, roughly
-                                                            // colinear through wrist->IP->tip
-  const engine = new GestureEngine(CONFIG);
-  const ev = engine.update([classifyHandPose(lm)], 0.0);
-  check("thumb pointing down fires colorCycle 'down'", ev.colorCycle === "down");
-}
-{
-  // cooldown: second thumb tick immediately after should NOT refire
-  const engine = new GestureEngine(CONFIG);
-  const thumbUp = makeHand({ thumbExt: true, wristY: 0.5 });
-  engine.update([classifyHandPose(thumbUp)], 0.0);
-  const ev2 = engine.update([classifyHandPose(thumbUp)], 0.05);
-  check("thumb tick respects cooldown (no immediate refire)", ev2.colorCycle === null);
-}
-
 // ---------- double-pinch "ping" ----------
 {
   const engine = new GestureEngine(CONFIG);
@@ -233,7 +205,7 @@ console.log(failures === 0 ? "\nALL TESTS PASSED (extended)" : `\n${failures} TE
   const shakaLm = makeHand({ thumbExt: true, pinkyExt: true });
   const p = classifyHandPose(shakaLm);
   check("shaka pose classified", p.shaka === true);
-  check("shaka is not thumbOnly", p.thumbOnly === false);
+  check("shaka is a distinct pose from rock", p.shaka === true && p.rock === false);
 }
 {
   const threeLm = makeHand({ indexExt: true, middleExt: true, ringExt: true });
@@ -295,7 +267,7 @@ console.log(failures === 0 ? "\nALL TESTS PASSED (extended)" : `\n${failures} TE
   const fakePoseAt = (dist) => ({
     pinching: dist < CONFIG.PINCH_THRESHOLD, // raw value, hysteresis overrides this
     pinchDist: dist,
-    openPalm: false, fist: false, thumbOnly: false, thumbDir: null,
+    openPalm: false, fist: false,
     peace: false, rock: false, shaka: false, threeFinger: false,
     center: { x: 0.5, y: 0.5 }, pinchPoint: { x: 0.5, y: 0.5 }, scale: 0.15,
   });
@@ -354,4 +326,43 @@ console.log(failures === 0 ? "\nALL TESTS PASSED (v2)" : `\n${failures} TEST(S) 
 }
 
 console.log(failures === 0 ? "\nALL TESTS PASSED (v3)" : `\n${failures} TEST(S) FAILED (v3)`);
+
+// ---------- fist brake (instant, no hold delay) ----------
+{
+  const engine = new GestureEngine(CONFIG);
+  const fistHand = makeHand({ wristX: 0.5 });
+  const ev = engine.update([classifyHandPose(fistHand)], 0.0);
+  check("single fist fires brake on the very first frame (no hold delay)", ev.brake === true);
+}
+{
+  const engine = new GestureEngine(CONFIG);
+  const left = makeHand({ wristX: 0.3 });
+  const right = makeHand({ wristX: 0.7 });
+  const ev = engine.update([classifyHandPose(left), classifyHandPose(right)], 0.0);
+  check("two-hand fist fires brake immediately too", ev.brake === true);
+}
+{
+  const engine = new GestureEngine(CONFIG);
+  const openHand = makeHand({ indexExt: true, middleExt: true, ringExt: true, pinkyExt: true, wristX: 0.5 });
+  const ev = engine.update([classifyHandPose(openHand)], 0.0);
+  check("open palm does not fire brake", ev.brake === false);
+}
+{
+  const engine = new GestureEngine(CONFIG);
+  const pinchHand = makeHand({ indexExt: true, pinch: true, wristX: 0.5 });
+  const ev = engine.update([classifyHandPose(pinchHand)], 0.0);
+  check("pinch does not fire brake", ev.brake === false);
+}
+{
+  // one hand fisted, the other actively pinch-rotating: brake should NOT
+  // fire, so it can't fight an in-progress single-hand rotate from the
+  // other hand.
+  const engine = new GestureEngine(CONFIG);
+  const fistHand = makeHand({ wristX: 0.3 });
+  const pinchHand = makeHand({ indexExt: true, pinch: true, wristX: 0.7 });
+  const ev = engine.update([classifyHandPose(fistHand), classifyHandPose(pinchHand)], 0.0);
+  check("a fist alongside an actively-pinching other hand does not brake", ev.brake === false);
+}
+
+console.log(failures === 0 ? "\nALL TESTS PASSED (v4)" : `\n${failures} TEST(S) FAILED (v4)`);
 process.exit(failures === 0 ? 0 : 1);

@@ -94,7 +94,6 @@ export function classifyHandPose(lm, cfg = CONFIG) {
   const rock = indexExt && pinkyExt && !middleExt && !ringExt && !pinching;
   const shaka = thumbExt && pinkyExt && !indexExt && !middleExt && !ringExt && !pinching;
   const threeFinger = indexExt && middleExt && ringExt && !pinkyExt && !pinching;
-  const thumbOnly = thumbExt && !indexExt && !middleExt && !ringExt && !pinkyExt && !pinching;
   const openPalm = extendedCount >= 3 && !pinching && !threeFinger;
   const fist = extendedCount === 0 && !pinching && !thumbExt;
 
@@ -103,8 +102,6 @@ export function classifyHandPose(lm, cfg = CONFIG) {
     pinchDist,
     openPalm,
     fist,
-    thumbOnly,
-    thumbDir: thumbOnly ? (lm[THUMB_TIP].y < lm[WRIST].y ? "up" : "down") : null,
     peace,
     rock,
     shaka,
@@ -132,7 +129,6 @@ export class GestureEngine {
     this._prevTwoHandCenter = null;
     this._swipeHistory = [];
     this._lastSwipeTime = -Infinity;
-    this._lastThumbTickTime = -Infinity;
     this._lastRockTapTime = -Infinity;
     this._lastShakaTapTime = -Infinity;
     this._lastPinchReleaseTime = -Infinity;
@@ -186,7 +182,7 @@ export class GestureEngine {
 
     const events = {
       rotateDelta: null, scale: null, pan: null, swipe: null, swipeVertical: null,
-      reset: false, fullReset: false, colorCycle: null, ping: false,
+      reset: false, fullReset: false, ping: false, brake: false,
       nativeToggle: false, fullscreenToggle: false, muteToggle: false, screenshot: false,
       mode: "idle",
     };
@@ -217,10 +213,6 @@ export class GestureEngine {
         }
       }
 
-      if (primary.thumbOnly && now - this._lastThumbTickTime > cfg.GESTURE_COOLDOWN) {
-        events.colorCycle = primary.thumbDir;
-        this._lastThumbTickTime = now;
-      }
       if (primary.rock && now - this._lastRockTapTime > cfg.GESTURE_COOLDOWN) {
         events.fullscreenToggle = true;
         this._lastRockTapTime = now;
@@ -234,8 +226,11 @@ export class GestureEngine {
     }
 
     // ---- hold-to-fire gestures (jitter-tolerant) ----
-    events.reset = this._hold("fist", !!(primary && primary.fist && poses.length === 1), now, cfg.RESET_HOLD_DURATION);
-    events.fullReset = this._hold("twoFist", poses.length === 2 && poses.every((p) => p.fist), now, cfg.RESET_HOLD_DURATION);
+    const singleFist = !!(primary && primary.fist && poses.length === 1);
+    const twoFist = poses.length === 2 && poses.every((p) => p.fist);
+    events.brake = singleFist || twoFist; // instant: true every frame a fist is held, no delay
+    events.reset = this._hold("fist", singleFist, now, cfg.RESET_HOLD_DURATION);
+    events.fullReset = this._hold("twoFist", twoFist, now, cfg.RESET_HOLD_DURATION);
     events.nativeToggle = this._hold("peace", !!(primary && primary.peace), now, cfg.PEACE_HOLD_DURATION);
     events.screenshot = this._hold("threeFinger", !!(primary && primary.threeFinger), now, cfg.THREE_FINGER_HOLD_DURATION);
 

@@ -36,12 +36,11 @@ need to do this once.
 | Quick double-pinch (pinch, release, pinch again fast) | Ping — particle burst |
 | Open palm, fast horizontal swipe | Cycle to next/previous model |
 | Open palm, fast vertical swipe | Show/hide the HUD panels |
-| Thumb up, tap | Next color theme |
-| Thumb down, tap | Previous color theme |
 | Peace sign ✌️ (index+middle), held ~0.6s | Toggle native materials / hologram skin |
 | Rock sign 🤟 (index+pinky), tap | Toggle fullscreen |
 | Shaka 🤙 (thumb+pinky), tap | Toggle mute |
 | Three fingers (index+middle+ring), held ~0.6s | Save screenshot |
+| Fist (either hand) | Instantly stops all rotation/pan — like grabbing the hologram to still it |
 | Fist, held ~0.7s | Reset view (rotation/scale/pan) |
 | Both hands as fists, held ~0.7s | Full reset — view, color, and model all back to default |
 
@@ -54,7 +53,8 @@ need to do this once.
 | `S` | Save a screenshot |
 | `F` | Toggle fullscreen |
 | `M` | Toggle sound |
-| `C` | Cycle color theme |
+| `C` | Next color theme |
+| `Shift+C` | Previous color theme |
 | `R` | Reset view |
 
 The toolbar top-right (🔊 ⛶ 📷 ?) does the same things with clicks.
@@ -72,6 +72,12 @@ The toolbar top-right (🔊 ⛶ 📷 ?) does the same things with clicks.
 - 🤟 Rock sign, tap — toggle fullscreen, one-handed.
 - 🤙 Shaka, tap — toggle mute, one-handed.
 - Three fingers, held — save a screenshot, one-handed.
+
+**Color cycling moved to keyboard-only**
+- The thumb up/down tap gesture for color cycling has been removed — it's now `C` (next) / `Shift+C` (previous) only. This also frees up the thumb-only pose so it can't be misread from an incidental hand position.
+
+**Fist now brakes instantly**
+- Making a fist used to do nothing until you'd held it for ~0.7s (the reset trigger). Now it acts as an instant grab-and-stop — the moment you fist, any spinning/panning momentum halts immediately, exactly like grabbing a spinning object to still it. Keep holding the fist and it still resets after ~0.7s, same as before — the instant stop and the delayed reset are two stages of the same gesture.
 
 **Reliability & persistence (previous pass)**
 - A calibration step now runs automatically on first launch — no more guessing at `PINCH_THRESHOLD`.
