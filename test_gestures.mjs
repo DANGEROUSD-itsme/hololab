@@ -365,4 +365,58 @@ console.log(failures === 0 ? "\nALL TESTS PASSED (v3)" : `\n${failures} TEST(S) 
 }
 
 console.log(failures === 0 ? "\nALL TESTS PASSED (v4)" : `\n${failures} TEST(S) FAILED (v4)`);
+
+// ---------- stillness gate: moving hand must not trigger holds ----------
+{
+  // Simulates raising a hand into frame: the peace shape appears each frame,
+  // but the hand center keeps moving fast (as it would while being raised) -
+  // this must NOT accumulate enough hold-time to fire nativeToggle.
+  const engine = new GestureEngine(CONFIG);
+  let fired = false;
+  for (let i = 0; i < 20; i++) {
+    const hand = makeHand({ indexExt: true, middleExt: true, wristX: 0.2 + i * 0.1, wristY: 0.9 - i * 0.08 });
+    const ev = engine.update([classifyHandPose(hand)], i * 0.1);
+    if (ev.nativeToggle) fired = true;
+  }
+  check("a moving hand passing through 'peace' does NOT fire nativeToggle", fired === false);
+}
+{
+  // Same idea for fist - moving hand should not fire reset either.
+  const engine = new GestureEngine(CONFIG);
+  let fired = false;
+  for (let i = 0; i < 20; i++) {
+    const hand = makeHand({ wristX: 0.2 + i * 0.1, wristY: 0.9 - i * 0.08 });
+    const ev = engine.update([classifyHandPose(hand)], i * 0.1);
+    if (ev.reset) fired = true;
+  }
+  check("a moving fist does NOT fire reset", fired === false);
+}
+{
+  // But brake (the instant stop) should STILL fire immediately even while
+  // the hand is moving - that's deliberately exempt from the stillness gate.
+  const engine = new GestureEngine(CONFIG);
+  const movingFist = makeHand({ wristX: 0.4, wristY: 0.85 });
+  const ev = engine.update([classifyHandPose(movingFist)], 0.0);
+  check("brake still fires instantly regardless of motion", ev.brake === true);
+}
+{
+  // A hand that moves into position and THEN holds still should still fire
+  // normally once it settles - the gate only blocks while actually moving.
+  const engine = new GestureEngine(CONFIG);
+  let fired = false;
+  // first, move into a fist over a few frames
+  for (let i = 0; i < 5; i++) {
+    const hand = makeHand({ wristX: 0.3 + i * 0.04, wristY: 0.9 });
+    engine.update([classifyHandPose(hand)], i * 0.1);
+  }
+  // now hold perfectly still at the final position for the full duration
+  for (let i = 5; i < 15; i++) {
+    const hand = makeHand({ wristX: 0.46, wristY: 0.9 });
+    const ev = engine.update([classifyHandPose(hand)], i * 0.1);
+    if (ev.reset) fired = true;
+  }
+  check("settling into place then holding still still fires reset", fired === true);
+}
+
+console.log(failures === 0 ? "\nALL TESTS PASSED (v5)" : `\n${failures} TEST(S) FAILED (v5)`);
 process.exit(failures === 0 ? 0 : 1);

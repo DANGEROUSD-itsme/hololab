@@ -12,6 +12,10 @@ export const CONFIG = {
                                      // than the old wrist-distance heuristic
   THUMB_STRAIGHT_ANGLE_DEG: 140,
   HOLD_MISS_TOLERANCE: 2,   // consecutive off-frames a hold-to-fire gesture tolerates before resetting
+  HOLD_STILLNESS_MAX_VELOCITY: 0.6, // normalized units/sec - hold-to-fire gestures (reset, native
+                                      // toggle, screenshot) only accumulate while the hand is roughly
+                                      // still, so passing through a pose's shape while raising/moving
+                                      // your hand can't accidentally trigger them
 
   // Interaction sensitivity
   ROTATE_SENSITIVITY: 6.0,   // radians per full normalized-frame movement

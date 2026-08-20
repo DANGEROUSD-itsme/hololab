@@ -44,7 +44,7 @@ need to do this once.
 | Fist, held ~0.7s | Reset view (rotation/scale/pan) |
 | Both hands as fists, held ~0.7s | Full reset — view, color, and model all back to default |
 
-**Files** — drop any of these onto the page: `.glb`, `.3mf`, `.obj`, `.fbx`, `.stl`, `.ply`
+**Files** — drop any of these onto the page: `.glb`, `.gltf` (self-contained only), `.3mf`, `.obj`, `.fbx`, `.stl`, `.ply`
 
 **Keyboard**
 | Key | Action |
@@ -78,6 +78,9 @@ The toolbar top-right (🔊 ⛶ 📷 ?) does the same things with clicks.
 
 **Fist now brakes instantly**
 - Making a fist used to do nothing until you'd held it for ~0.7s (the reset trigger). Now it acts as an instant grab-and-stop — the moment you fist, any spinning/panning momentum halts immediately, exactly like grabbing a spinning object to still it. Keep holding the fist and it still resets after ~0.7s, same as before — the instant stop and the delayed reset are two stages of the same gesture.
+
+**Held gestures now require actual stillness**
+- Raising or moving your hand into frame could pass through a pose's shape for a moment — e.g. the peace sign, since middle and index often straighten before ring and pinky do — and with the hold timer's jitter tolerance, that was enough to accidentally fire reset/native-toggle/screenshot on a hand that was never actually held there on purpose. Reset, full reset, native-materials toggle, and screenshot now only accumulate hold-time while the hand's position is genuinely still; a hand in motion can't trigger them no matter what shape it passes through. (The instant fist-brake above is deliberately exempt from this — a grab-to-stop should work even while your hand is still settling into place.)
 
 **Reliability & persistence (previous pass)**
 - A calibration step now runs automatically on first launch — no more guessing at `PINCH_THRESHOLD`.
@@ -122,6 +125,7 @@ The toolbar top-right (🔊 ⛶ 📷 ?) does the same things with clicks.
 - `PINCH_ENGAGE_RATIO` — the hysteresis band. Lower = pinch needs to close tighter before it registers, but once registered it stays held more loosely.
 - `FINGER_STRAIGHT_ANGLE_DEG` / `THUMB_STRAIGHT_ANGLE_DEG` — the joint-bend angle a finger needs to exceed to count as extended. Raise if fingers register as extended too easily; lower if genuinely straight fingers aren't registering.
 - `HOLD_MISS_TOLERANCE` — how many consecutive off-frames a held gesture (fist, peace, etc.) tolerates before the hold timer resets.
+- `HOLD_STILLNESS_MAX_VELOCITY` — how much hand movement is tolerated while accumulating a hold (reset/native-toggle/screenshot). Raise it if deliberate holds aren't registering because your hand naturally drifts a little; lower it if a moving hand is still accidentally triggering them.
 - `INERTIA_DAMPING` / `PAN_INERTIA_DAMPING` — closer to 1.0 = spins/pans longer after release.
 - `DETECTION_INTERVAL_MS` — lower = more responsive tracking but more CPU/GPU load; raise if you need more headroom on a slower machine.
 - `MAX_EDGE_TRIANGLES` — the high-poly safeguard threshold for dropped models.
@@ -132,7 +136,7 @@ The toolbar top-right (🔊 ⛶ 📷 ?) does the same things with clicks.
 ## Architecture
 
 - `gestures.js` — pure gesture math and the `GestureEngine` state machine (every pose classification and event: rotate, scale, pan, swipe (both axes), reset, full reset, color cycle, ping). No Three.js or MediaPipe imports, so it's fully unit-testable.
-- `test_gestures.mjs` — Node test suite, 41 checks across every gesture, pose classification, hysteresis, and jitter-tolerance behavior. Run with `node test_gestures.mjs`.
+- `test_gestures.mjs` — Node test suite, 47 checks across every gesture, pose classification, hysteresis, jitter-tolerance, and stillness-gating behavior. Run with `node test_gestures.mjs`.
 - `hand_input.js` — thin wrapper around MediaPipe Tasks Vision (`HandLandmarker`) and `getUserMedia`.
 - `audio.js` — `HoloAudio` class: ambient hum + short WebAudio-synthesized cues, single mute switch.
 - `main.js` — Three.js scene (holographic fresnel material, bloom, ambient rings, particle system), the six file-format loaders, the color theme system, calibration/help/toolbar wiring, and the per-frame loop that ties gesture events to the 3D transform.
@@ -147,9 +151,14 @@ The toolbar top-right (🔊 ⛶ 📷 ?) does the same things with clicks.
 
 ## Troubleshooting
 
+- **Things trigger just from raising/moving my hand**: lower `HOLD_STILLNESS_MAX_VELOCITY` in `config.js` — your hand may be moving slower than the default threshold expects during the motion you're doing.
+
 - **"Camera access failed"**: you're probably opening the file directly (`file://`) instead of via `http://localhost`.
 - **Pinch/rotate won't trigger**: re-run calibration — hold a genuine pinch the whole time the calibration screen is up. Watch the "PINCH DIST" readout in the status panel; it should drop well below the threshold shown when you actually pinch.
 - **Choppy tracking**: `HandLandmarker` uses `delegate: "GPU"` in `hand_input.js` — try `"CPU"` if your browser/GPU combo struggles. Also try raising `DETECTION_INTERVAL_MS` in `config.js`.
 - **Low FPS on a dropped model**: check the toast — if it says the wireframe was skipped, the model is just very high-poly; that's expected behavior to protect frame rate, not a bug.
-- **Dropped file doesn't load**: only binary glTF (`.glb`) is supported for glTF, not a loose `.gltf` + textures folder. Check the browser console (F12) for the specific parser error.
+- **Dropped file doesn't load**: check the toast and the status line at the bottom — the actual parser error message now shows directly there instead of just "check console." For `.gltf`, only self-contained files work (buffers/images embedded as data URIs) — a `.gltf` split across a separate `.bin`/texture files can't be resolved from a single dropped file; use `.glb` instead if you have the option when exporting.
+- **`.glb` file fails to parse**: as of this build, Draco and Meshopt mesh compression are both supported (common export optimizations that previously weren't wired up and would cause an otherwise-valid `.glb` to fail outright).
+- **`.3mf` file fails or seems stuck**: large 3MF files (common from 3D-printing slicers, which often embed thumbnails and per-object metadata) can take a few seconds to unzip and parse — the status line will read "LOADING…" the whole time, so give it a moment before assuming it's failed. If it does fail, check whether the file is a full slicer *project* file (multi-plate, with embedded print settings) rather than a plain model export — those sometimes use extensions the base 3MF loader doesn't expect. Re-exporting just the mesh as `.3mf`, or as `.obj`/`.stl` instead, usually resolves it.
+- **Multiple files dropped at once**: only the first file is used — a toast tells you which one. This matters for formats split across multiple files (e.g. `.obj` + `.mtl` + textures), which aren't supported as a set; only self-contained single-file formats work via drag-and-drop here.
 - **No sound**: click 🔊/press `M` to check mute state; some browsers also require a page click before any audio plays at all (browser autoplay policy) — the ENGAGE button click satisfies this.

@@ -124,6 +124,8 @@ export class GestureEngine {
   constructor(cfg = CONFIG) {
     this.cfg = cfg;
     this._pinchState = [false, false]; // per hand-slot hysteresis state
+    this._lastHandPos = null;
+    this._lastHandTime = null;
     this._smoothedSingle = null;
     this._prevTwoHandDist = null;
     this._prevTwoHandCenter = null;
@@ -137,6 +139,8 @@ export class GestureEngine {
 
   reset() {
     this._pinchState = [false, false];
+    this._lastHandPos = null;
+    this._lastHandTime = null;
     this._smoothedSingle = null;
     this._prevTwoHandDist = null;
     this._prevTwoHandCenter = null;
@@ -157,6 +161,23 @@ export class GestureEngine {
     this[missKey] = (this[missKey] || 0) + 1;
     if (this[missKey] > this.cfg.HOLD_MISS_TOLERANCE) this[startKey] = null;
     return false;
+  }
+
+  /** Tracks how fast the primary hand's center is moving, in normalized units/sec. */
+  _updateHandVelocity(primary, now) {
+    let vel = 0;
+    if (primary) {
+      if (this._lastHandPos && this._lastHandTime !== null) {
+        const dt = now - this._lastHandTime;
+        if (dt > 0.001) vel = dist2D(primary.center, this._lastHandPos) / dt;
+      }
+      this._lastHandPos = { x: primary.center.x, y: primary.center.y };
+      this._lastHandTime = now;
+    } else {
+      this._lastHandPos = null;
+      this._lastHandTime = null;
+    }
+    return vel;
   }
 
   /** Smooths pinch state per hand-slot with a two-threshold hysteresis band. */
@@ -228,11 +249,21 @@ export class GestureEngine {
     // ---- hold-to-fire gestures (jitter-tolerant) ----
     const singleFist = !!(primary && primary.fist && poses.length === 1);
     const twoFist = poses.length === 2 && poses.every((p) => p.fist);
-    events.brake = singleFist || twoFist; // instant: true every frame a fist is held, no delay
-    events.reset = this._hold("fist", singleFist, now, cfg.RESET_HOLD_DURATION);
-    events.fullReset = this._hold("twoFist", twoFist, now, cfg.RESET_HOLD_DURATION);
-    events.nativeToggle = this._hold("peace", !!(primary && primary.peace), now, cfg.PEACE_HOLD_DURATION);
-    events.screenshot = this._hold("threeFinger", !!(primary && primary.threeFinger), now, cfg.THREE_FINGER_HOLD_DURATION);
+    events.brake = singleFist || twoFist; // instant: true every frame a fist is held, no delay - deliberately NOT stillness-gated, since a grab-to-stop should work even while the hand is still settling into place
+
+    // Hold-to-fire commitments (reset, full reset, native toggle, screenshot)
+    // additionally require the hand to be roughly STILL. Without this, simply
+    // raising or moving your hand into frame can pass through a pose's shape
+    // for a moment (e.g. middle+index often straighten before ring+pinky do)
+    // and, combined with the jitter-tolerant hold timer, accidentally fire a
+    // gesture you never meant to hold.
+    const handVel = this._updateHandVelocity(primary, now);
+    const isStill = handVel < cfg.HOLD_STILLNESS_MAX_VELOCITY;
+
+    events.reset = this._hold("fist", singleFist && isStill, now, cfg.RESET_HOLD_DURATION);
+    events.fullReset = this._hold("twoFist", twoFist && isStill, now, cfg.RESET_HOLD_DURATION);
+    events.nativeToggle = this._hold("peace", !!(primary && primary.peace) && isStill, now, cfg.PEACE_HOLD_DURATION);
+    events.screenshot = this._hold("threeFinger", !!(primary && primary.threeFinger) && isStill, now, cfg.THREE_FINGER_HOLD_DURATION);
 
     // ---- two-hand pinch: scale + pan ----
     if (pinchingHands.length === 2) {

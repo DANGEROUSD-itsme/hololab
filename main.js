@@ -4,6 +4,8 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { ThreeMFLoader } from "three/addons/loaders/3MFLoader.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
@@ -347,6 +349,14 @@ function updateParticles(now) {
 // GLTF / 3MF / OBJ / FBX / STL / PLY drag-and-drop loading
 // ---------------------------------------------------------------------------
 const gltfLoader = new GLTFLoader();
+// Many real-world .glb/.gltf files ship with Draco or Meshopt mesh
+// compression (common export optimizations) - without decoders wired up,
+// GLTFLoader just throws and refuses to load, which was very likely the
+// actual cause of "uploads not working."
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/");
+gltfLoader.setDRACOLoader(dracoLoader);
+gltfLoader.setMeshoptDecoder(MeshoptDecoder);
 const threeMFLoader = new ThreeMFLoader();
 const objLoader = new OBJLoader();
 const fbxLoader = new FBXLoader();
@@ -445,12 +455,18 @@ function placeCustomModel(objectOrGeometry, label, { isGeometry = false } = {}) 
   const box = new THREE.Box3().setFromObject(obj);
   const size = new THREE.Vector3();
   box.getSize(size);
-  const maxDim = Math.max(size.x, size.y, size.z, 1e-6);
+  const rawMax = Math.max(size.x, size.y, size.z);
+  if (!isFinite(rawMax) || rawMax <= 0) {
+    toast(`${label}: loaded but appears to contain no visible geometry`);
+  }
+  const maxDim = isFinite(rawMax) && rawMax > 0 ? rawMax : 1;
   const scale = 2.2 / maxDim;
   obj.scale.setScalar(scale);
   const center = new THREE.Vector3();
   box.getCenter(center);
-  obj.position.sub(center.multiplyScalar(scale));
+  if (isFinite(center.x) && isFinite(center.y) && isFinite(center.z)) {
+    obj.position.sub(center.multiplyScalar(scale));
+  }
 
   currentMesh = obj;
   modelGroup.add(currentMesh);
@@ -461,16 +477,18 @@ function placeCustomModel(objectOrGeometry, label, { isGeometry = false } = {}) 
 }
 
 function reportLoadError(label, err) {
-  telemetryEl.textContent = `FAILED TO LOAD ${label} — check console`;
-  toast(`FAILED: ${label}`);
+  const reason = (err && (err.message || err.toString?.())) || "unknown error";
+  const shortReason = reason.length > 60 ? reason.slice(0, 60) + "…" : reason;
+  telemetryEl.textContent = `FAILED TO LOAD ${label}: ${shortReason}`;
+  toast(`FAILED: ${shortReason}`);
   audio.error();
-  console.error(err);
+  console.error(`[HOLOLAB] Failed to load ${label}:`, err);
 }
 
 function loadDroppedFile(file) {
   const name = file.name.toLowerCase();
   const ext = name.split(".").pop();
-  const SUPPORTED = ["glb", "3mf", "obj", "fbx", "stl", "ply"];
+  const SUPPORTED = ["glb", "gltf", "3mf", "obj", "fbx", "stl", "ply"];
   if (!SUPPORTED.includes(ext)) {
     telemetryEl.textContent = `DROP FAILED: unsupported format .${ext || "?"}`;
     toast(`UNSUPPORTED: .${ext || "?"}`);
@@ -479,35 +497,59 @@ function loadDroppedFile(file) {
   }
 
   toast(`LOADING ${file.name}…`);
+  telemetryEl.textContent = `LOADING ${file.name}…`;
   const reader = new FileReader();
   reader.onerror = (err) => reportLoadError(file.name, err);
 
-  if (ext === "obj") {
+  if (ext === "obj" || ext === "gltf") {
     reader.onload = () => {
-      try { placeCustomModel(objLoader.parse(reader.result), file.name); }
-      catch (err) { reportLoadError(file.name, err); }
+      // defer the actual (synchronous, potentially slow) parse to the next
+      // tick so the "LOADING…" state has a chance to actually paint first,
+      // instead of the parse blocking the main thread immediately
+      setTimeout(() => {
+        try {
+          if (ext === "obj") {
+            placeCustomModel(objLoader.parse(reader.result), file.name);
+          } else {
+            // .gltf (JSON) only works here if it's self-contained (buffers/images
+            // embedded as data URIs) - a .gltf split across a separate .bin and
+            // texture files can't be resolved from a single dropped file.
+            gltfLoader.parse(reader.result, "", (gltf) => placeCustomModel(gltf.scene, file.name),
+              (err) => reportLoadError(file.name, err));
+          }
+        } catch (err) {
+          reportLoadError(file.name, err);
+        }
+      }, 0);
     };
     reader.readAsText(file);
     return;
   }
 
   reader.onload = () => {
-    try {
-      if (ext === "glb") {
-        gltfLoader.parse(reader.result, "", (gltf) => placeCustomModel(gltf.scene, file.name),
-          (err) => reportLoadError(file.name, err));
-      } else if (ext === "3mf") {
-        placeCustomModel(threeMFLoader.parse(reader.result), file.name);
-      } else if (ext === "fbx") {
-        placeCustomModel(fbxLoader.parse(reader.result, ""), file.name);
-      } else if (ext === "stl") {
-        placeCustomModel(stlLoader.parse(reader.result), file.name, { isGeometry: true });
-      } else if (ext === "ply") {
-        placeCustomModel(plyLoader.parse(reader.result), file.name, { isGeometry: true });
+    setTimeout(() => {
+      try {
+        if (ext === "glb") {
+          gltfLoader.parse(reader.result, "", (gltf) => placeCustomModel(gltf.scene, file.name),
+            (err) => reportLoadError(file.name, err));
+        } else if (ext === "3mf") {
+          placeCustomModel(threeMFLoader.parse(reader.result), file.name);
+        } else if (ext === "fbx") {
+          placeCustomModel(fbxLoader.parse(reader.result, ""), file.name);
+        } else if (ext === "stl") {
+          placeCustomModel(stlLoader.parse(reader.result), file.name, { isGeometry: true });
+        } else if (ext === "ply") {
+          placeCustomModel(plyLoader.parse(reader.result), file.name, { isGeometry: true });
+        }
+      } catch (err) {
+        if (ext === "3mf") {
+          console.warn("[HOLOLAB] 3MF parse failed. If this is a slicer PROJECT file (multi-plate, "
+            + "with embedded print settings) rather than a plain model export, try re-exporting just "
+            + "the model/mesh as .3mf, or as .obj/.stl instead.");
+        }
+        reportLoadError(file.name, err);
       }
-    } catch (err) {
-      reportLoadError(file.name, err);
-    }
+    }, 0);
   };
   reader.readAsArrayBuffer(file);
 }
@@ -520,8 +562,12 @@ window.addEventListener("drop", (e) => {
   e.preventDefault();
   dragDepth = 0;
   document.body.classList.remove("drag-active");
-  const file = e.dataTransfer.files[0];
-  if (file) loadDroppedFile(file);
+  const files = e.dataTransfer.files;
+  if (!files || files.length === 0) return;
+  if (files.length > 1) {
+    toast(`Using ${files[0].name} — only one file at a time is supported`);
+  }
+  loadDroppedFile(files[0]);
 });
 
 // ---------------------------------------------------------------------------
