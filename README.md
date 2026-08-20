@@ -38,6 +38,10 @@ need to do this once.
 | Open palm, fast vertical swipe | Show/hide the HUD panels |
 | Thumb up, tap | Next color theme |
 | Thumb down, tap | Previous color theme |
+| Peace sign ✌️ (index+middle), held ~0.6s | Toggle native materials / hologram skin |
+| Rock sign 🤟 (index+pinky), tap | Toggle fullscreen |
+| Shaka 🤙 (thumb+pinky), tap | Toggle mute |
+| Three fingers (index+middle+ring), held ~0.6s | Save screenshot |
 | Fist, held ~0.7s | Reset view (rotation/scale/pan) |
 | Both hands as fists, held ~0.7s | Full reset — view, color, and model all back to default |
 
@@ -57,7 +61,19 @@ The toolbar top-right (🔊 ⛶ 📷 ?) does the same things with clicks.
 
 ## What's new in this pass
 
-**Reliability**
+**Tracking accuracy — the "mis-understanding" fix**
+- Finger extension used to be judged by comparing distances from the wrist, which is sensitive to how your hand is angled toward the camera — tilt your hand and a curled finger could read as extended. It's now judged by the actual joint bend angle (using the hand's full 3D landmark data), which stays accurate across a much wider range of hand orientations.
+- Pinch detection now has hysteresis: a lower threshold to *start* a pinch and a higher one to *release* it, so it no longer flickers on/off when your fingers hover near the boundary distance.
+- Hold-to-fire gestures (fist, two-fist, peace) now tolerate a couple of single-frame misreads without cancelling — one noisy camera frame won't reset a gesture you're still actively holding, while a genuinely broken hold still resets properly.
+- Pinch/hand-scale math now uses full 3D distance (previously 2D-only), which is more robust when your hand isn't facing the camera dead-on.
+
+**Four new single-hand gestures**
+- ✌️ Peace sign, held — toggle between the hologram skin and a dropped model's original materials (with proper 3-point lighting). Built-ins and geometry-only formats (STL/PLY) don't have "native" materials, so it'll tell you that instead of silently doing nothing.
+- 🤟 Rock sign, tap — toggle fullscreen, one-handed.
+- 🤙 Shaka, tap — toggle mute, one-handed.
+- Three fingers, held — save a screenshot, one-handed.
+
+**Reliability & persistence (previous pass)**
 - A calibration step now runs automatically on first launch — no more guessing at `PINCH_THRESHOLD`.
 - Hand/face detection is throttled to a fixed rate independent of the render loop, so a slower machine's ML inference never stalls the 3D scene — the model keeps spinning smoothly even if gesture tracking updates a bit less often.
 - Calibration and your last color theme are remembered locally between sessions.
@@ -97,6 +113,9 @@ The toolbar top-right (🔊 ⛶ 📷 ?) does the same things with clicks.
 `config.js` holds every sensitivity number, all commented:
 - `ROTATE_SENSITIVITY` / `PAN_SENSITIVITY` / `SCALE_MIN` / `SCALE_MAX`
 - `PINCH_THRESHOLD` — set automatically by calibration; only hand-edit to fine-tune afterward.
+- `PINCH_ENGAGE_RATIO` — the hysteresis band. Lower = pinch needs to close tighter before it registers, but once registered it stays held more loosely.
+- `FINGER_STRAIGHT_ANGLE_DEG` / `THUMB_STRAIGHT_ANGLE_DEG` — the joint-bend angle a finger needs to exceed to count as extended. Raise if fingers register as extended too easily; lower if genuinely straight fingers aren't registering.
+- `HOLD_MISS_TOLERANCE` — how many consecutive off-frames a held gesture (fist, peace, etc.) tolerates before the hold timer resets.
 - `INERTIA_DAMPING` / `PAN_INERTIA_DAMPING` — closer to 1.0 = spins/pans longer after release.
 - `DETECTION_INTERVAL_MS` — lower = more responsive tracking but more CPU/GPU load; raise if you need more headroom on a slower machine.
 - `MAX_EDGE_TRIANGLES` — the high-poly safeguard threshold for dropped models.
@@ -107,7 +126,7 @@ The toolbar top-right (🔊 ⛶ 📷 ?) does the same things with clicks.
 ## Architecture
 
 - `gestures.js` — pure gesture math and the `GestureEngine` state machine (every pose classification and event: rotate, scale, pan, swipe (both axes), reset, full reset, color cycle, ping). No Three.js or MediaPipe imports, so it's fully unit-testable.
-- `test_gestures.mjs` — Node test suite, 24 checks across every gesture. Run with `node test_gestures.mjs`.
+- `test_gestures.mjs` — Node test suite, 41 checks across every gesture, pose classification, hysteresis, and jitter-tolerance behavior. Run with `node test_gestures.mjs`.
 - `hand_input.js` — thin wrapper around MediaPipe Tasks Vision (`HandLandmarker`) and `getUserMedia`.
 - `audio.js` — `HoloAudio` class: ambient hum + short WebAudio-synthesized cues, single mute switch.
 - `main.js` — Three.js scene (holographic fresnel material, bloom, ambient rings, particle system), the six file-format loaders, the color theme system, calibration/help/toolbar wiring, and the per-frame loop that ties gesture events to the 3D transform.

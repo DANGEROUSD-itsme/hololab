@@ -196,6 +196,12 @@ function triangleCount(geometry) {
 let themeIndex = typeof prefs.themeIndex === "number" ? prefs.themeIndex % THEMES.length : 0;
 let currentFresnelMaterials = []; // materials to recolor + pulse on grab
 let nativeMode = false; // true when a dropped model keeps its own materials
+// Materials as originally loaded from a dropped scene-graph model (glb/3mf/obj/fbx),
+// kept so "native mode" can restore them. null for built-ins and geometry-only
+// formats (stl/ply), which never had original materials to begin with.
+// (declared early, before loadBuiltinModel(0) is called below, to avoid a
+// temporal-dead-zone reference error)
+let currentOriginalMaterials = null;
 
 function applyThemeVisuals() {
   const t = THEMES[themeIndex];
@@ -261,8 +267,11 @@ let currentMesh = null;
 function loadBuiltinModel(index) {
   if (currentMesh) modelGroup.remove(currentMesh);
   nativeMode = false;
+  currentOriginalMaterials = null;
   keyLight.intensity = 0;
   fillLight.intensity = 0;
+  ambientLight.intensity = 0.15;
+  rimLight.intensity = 2.0;
   modelIndex = ((index % MODEL_DEFS.length) + MODEL_DEFS.length) % MODEL_DEFS.length;
   currentMesh = MODEL_DEFS[modelIndex].build();
   currentFresnelMaterials = [currentMesh.children[0].material];
@@ -344,6 +353,14 @@ const fbxLoader = new FBXLoader();
 const stlLoader = new STLLoader();
 const plyLoader = new PLYLoader();
 
+function stripEdgeChildren(root) {
+  if (!root) return;
+  root.traverse((child) => {
+    const toRemove = child.children.filter((c) => c.isLineSegments);
+    toRemove.forEach((c) => { child.remove(c); c.geometry.dispose(); });
+  });
+}
+
 function applyHologramSkin(root) {
   let totalTris = 0;
   root.traverse((child) => { if (child.isMesh && child.geometry) totalTris += triangleCount(child.geometry); });
@@ -364,11 +381,47 @@ function applyHologramSkin(root) {
   return { materials: [material], addedEdges: addEdges, meshCount: skinned.length, totalTris };
 }
 
+// Materials as originally loaded from a dropped scene-graph model - see
+// declaration near the top of the file (kept there to avoid a TDZ bug with
+// the loadBuiltinModel(0) call that runs before this point in the file).
+
+function setNativeMode(enabled) {
+  if (!currentMesh) return;
+  if (enabled && !currentOriginalMaterials) {
+    toast("NO NATIVE MATERIALS — hologram-only model");
+    return;
+  }
+  nativeMode = enabled;
+  stripEdgeChildren(currentMesh);
+
+  if (enabled) {
+    currentOriginalMaterials.forEach((mat, mesh) => { mesh.material = mat; });
+    currentFresnelMaterials = [];
+    keyLight.intensity = 1.4;
+    fillLight.intensity = 0.7;
+    ambientLight.intensity = 0.5;
+    rimLight.intensity = 1.0;
+  } else {
+    const skin = applyHologramSkin(currentMesh);
+    currentFresnelMaterials = skin.materials;
+    keyLight.intensity = 0;
+    fillLight.intensity = 0;
+    ambientLight.intensity = 0.15;
+    rimLight.intensity = 2.0;
+  }
+  applyThemeVisuals();
+  toast(enabled ? "NATIVE MATERIALS" : "HOLOGRAM SKIN");
+  audio.chime();
+}
+
 function placeCustomModel(objectOrGeometry, label, { isGeometry = false } = {}) {
   if (currentMesh) modelGroup.remove(currentMesh);
   keyLight.intensity = 0;
   fillLight.intensity = 0;
+  ambientLight.intensity = 0.15;
+  rimLight.intensity = 2.0;
   nativeMode = false;
+  currentOriginalMaterials = null;
 
   let obj;
   if (isGeometry) {
@@ -377,6 +430,11 @@ function placeCustomModel(objectOrGeometry, label, { isGeometry = false } = {}) 
     currentFresnelMaterials = [obj.children[0].material];
   } else {
     obj = objectOrGeometry;
+    // capture original materials BEFORE the hologram skin overwrites them,
+    // so peace-hold can toggle back to them later
+    currentOriginalMaterials = new Map();
+    obj.traverse((child) => { if (child.isMesh) currentOriginalMaterials.set(child, child.material); });
+
     const skin = applyHologramSkin(obj);
     currentFresnelMaterials = skin.materials;
     if (!skin.addedEdges) {
@@ -725,6 +783,21 @@ function animate() {
       resetCooldownUntil = now + 1.0;
       audio.thud();
       toast("FULL RESET");
+    }
+    if (events.nativeToggle) {
+      setNativeMode(!nativeMode);
+    }
+    if (events.fullscreenToggle) {
+      toggleFullscreen();
+      toast(document.fullscreenElement ? "FULLSCREEN" : "WINDOWED");
+    }
+    if (events.muteToggle) {
+      audio.toggleMuted();
+      updateMuteBtn();
+      toast(audio.muted ? "MUTED" : "SOUND ON");
+    }
+    if (events.screenshot) {
+      takeScreenshot();
     }
 
     if (events.mode !== lastTelemetryMode) {

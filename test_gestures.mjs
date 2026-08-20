@@ -134,11 +134,13 @@ console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} TEST(S) FAILE
   check("thumb-only pose fires colorCycle", ev.colorCycle === "up");
 }
 {
-  // thumb down: need tip BELOW wrist. Our makeHand always places thumb tip
-  // above wrist when extended, so build a custom hand with thumb pointing down.
-  const lm = makeHand({ thumbExt: true, wristY: 0.5 });
-  // flip the thumb tip below the wrist to simulate "thumbs down"
-  lm[4] = { x: lm[4].x, y: 0.5 + 0.03, z: 0 };
+  // thumb down: build a genuinely straight thumb (for the new angle-based
+  // check) that points below the wrist, rather than just moving the tip.
+  const wristX = 0.5, wristY = 0.5;
+  const lm = makeHand({ wristX, wristY, thumbExt: false }); // other fingers curled
+  lm[3] = { x: wristX - 0.06, y: wristY + 0.02, z: 0 };   // IP: just below-left of wrist
+  lm[4] = { x: wristX - 0.14, y: wristY + 0.10, z: 0 };   // TIP: further below-left, roughly
+                                                            // colinear through wrist->IP->tip
   const engine = new GestureEngine(CONFIG);
   const ev = engine.update([classifyHandPose(lm)], 0.0);
   check("thumb pointing down fires colorCycle 'down'", ev.colorCycle === "down");
@@ -213,4 +215,143 @@ console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} TEST(S) FAILE
 }
 
 console.log(failures === 0 ? "\nALL TESTS PASSED (extended)" : `\n${failures} TEST(S) FAILED (extended)`);
+
+// ---------- new single-hand poses: peace / rock / shaka / three-finger ----------
+{
+  const peaceLm = makeHand({ indexExt: true, middleExt: true });
+  const p = classifyHandPose(peaceLm);
+  check("peace pose classified", p.peace === true);
+  check("peace is not openPalm", p.openPalm === false);
+}
+{
+  const rockLm = makeHand({ indexExt: true, pinkyExt: true });
+  const p = classifyHandPose(rockLm);
+  check("rock pose classified", p.rock === true);
+  check("rock is not peace", p.peace === false);
+}
+{
+  const shakaLm = makeHand({ thumbExt: true, pinkyExt: true });
+  const p = classifyHandPose(shakaLm);
+  check("shaka pose classified", p.shaka === true);
+  check("shaka is not thumbOnly", p.thumbOnly === false);
+}
+{
+  const threeLm = makeHand({ indexExt: true, middleExt: true, ringExt: true });
+  const p = classifyHandPose(threeLm);
+  check("threeFinger pose classified", p.threeFinger === true);
+  check("threeFinger is not openPalm (mutually exclusive)", p.openPalm === false);
+}
+
+// ---------- peace hold -> native toggle ----------
+{
+  const engine = new GestureEngine(CONFIG);
+  let fired = false;
+  for (let i = 0; i < 20; i++) {
+    const hand = makeHand({ indexExt: true, middleExt: true, wristX: 0.5 });
+    const ev = engine.update([classifyHandPose(hand)], i * 0.1);
+    if (ev.nativeToggle) fired = true;
+  }
+  check("held peace sign fires nativeToggle", fired === true);
+}
+
+// ---------- three-finger hold -> screenshot ----------
+{
+  const engine = new GestureEngine(CONFIG);
+  let fired = false;
+  for (let i = 0; i < 20; i++) {
+    const hand = makeHand({ indexExt: true, middleExt: true, ringExt: true, wristX: 0.5 });
+    const ev = engine.update([classifyHandPose(hand)], i * 0.1);
+    if (ev.screenshot) fired = true;
+  }
+  check("held three-finger fires screenshot", fired === true);
+}
+
+// ---------- rock tap -> fullscreen toggle (with cooldown) ----------
+{
+  const engine = new GestureEngine(CONFIG);
+  const rockLm = makeHand({ indexExt: true, pinkyExt: true, wristX: 0.5 });
+  const ev1 = engine.update([classifyHandPose(rockLm)], 0.0);
+  const ev2 = engine.update([classifyHandPose(rockLm)], 0.05); // too soon - cooldown
+  check("rock tap fires fullscreenToggle once", ev1.fullscreenToggle === true);
+  check("rock tap respects cooldown", ev2.fullscreenToggle === false);
+}
+
+// ---------- shaka tap -> mute toggle ----------
+{
+  const engine = new GestureEngine(CONFIG);
+  const shakaLm = makeHand({ thumbExt: true, pinkyExt: true, wristX: 0.5 });
+  const ev = engine.update([classifyHandPose(shakaLm)], 0.0);
+  check("shaka tap fires muteToggle", ev.muteToggle === true);
+}
+
+// ---------- pinch hysteresis ----------
+{
+  // A pinch distance between the engage and release thresholds should NOT
+  // start a fresh pinch, but SHOULD keep an already-active pinch going.
+  const engine = new GestureEngine(CONFIG);
+  const engageDist = CONFIG.PINCH_THRESHOLD * CONFIG.PINCH_ENGAGE_RATIO;
+  const midBand = (engageDist + CONFIG.PINCH_THRESHOLD) / 2; // between engage and release
+
+  const fakePoseAt = (dist) => ({
+    pinching: dist < CONFIG.PINCH_THRESHOLD, // raw value, hysteresis overrides this
+    pinchDist: dist,
+    openPalm: false, fist: false, thumbOnly: false, thumbDir: null,
+    peace: false, rock: false, shaka: false, threeFinger: false,
+    center: { x: 0.5, y: 0.5 }, pinchPoint: { x: 0.5, y: 0.5 }, scale: 0.15,
+  });
+
+  const midBandResult = engine.update([fakePoseAt(midBand)], 0.0);
+  check("mid-band distance does NOT start a fresh pinch", midBandResult.rotateDelta === null && midBandResult.mode !== "rotate");
+
+  // now genuinely engage
+  engine.update([fakePoseAt(engageDist * 0.5)], 0.05);
+  // move back out to the mid-band - should STILL count as pinching (hysteresis holds it)
+  const stillHeld = engine.update([fakePoseAt(midBand)], 0.1);
+  check("mid-band distance keeps an active pinch held", stillHeld.mode === "rotate");
+}
+
+console.log(failures === 0 ? "\nALL TESTS PASSED (v2)" : `\n${failures} TEST(S) FAILED (v2)`);
+
+// ---------- hold jitter tolerance ----------
+{
+  // A held fist with ONE single-frame misclassification blip partway through
+  // should still fire reset - that blip should not cancel the hold.
+  const engine = new GestureEngine(CONFIG);
+  let fired = false;
+  for (let i = 0; i < 20; i++) {
+    // frame 5 is a noisy misread (not a fist) - everything else is a solid fist
+    const isBlip = i === 5;
+    const hand = isBlip
+      ? makeHand({ indexExt: true, wristX: 0.5 }) // briefly reads as "point" instead of fist
+      : makeHand({ wristX: 0.5 });
+    const ev = engine.update([classifyHandPose(hand)], i * 0.1);
+    if (ev.reset) fired = true;
+  }
+  check("a single-frame blip does not cancel an in-progress fist hold", fired === true);
+}
+{
+  // But a SUSTAINED break (more than HOLD_MISS_TOLERANCE frames) should
+  // genuinely cancel it - jitter tolerance isn't infinite.
+  const engine = new GestureEngine(CONFIG);
+  let fired = false;
+  for (let i = 0; i < 10; i++) {
+    const hand = makeHand({ wristX: 0.5 }); // solid fist
+    const ev = engine.update([classifyHandPose(hand)], i * 0.1);
+    if (ev.reset) fired = true;
+  }
+  // now break the fist for a long stretch, then try again from scratch (short)
+  for (let i = 10; i < 15; i++) {
+    const hand = makeHand({ indexExt: true, wristX: 0.5 }); // sustained non-fist
+    engine.update([classifyHandPose(hand)], i * 0.1);
+  }
+  let refired = false;
+  for (let i = 15; i < 17; i++) {
+    const hand = makeHand({ wristX: 0.5 });
+    const ev = engine.update([classifyHandPose(hand)], i * 0.1);
+    if (ev.reset) refired = true;
+  }
+  check("a sustained break genuinely resets the hold (not fired again immediately)", refired === false);
+}
+
+console.log(failures === 0 ? "\nALL TESTS PASSED (v3)" : `\n${failures} TEST(S) FAILED (v3)`);
 process.exit(failures === 0 ? 0 : 1);

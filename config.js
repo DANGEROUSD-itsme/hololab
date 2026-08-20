@@ -4,7 +4,14 @@
 export const CONFIG = {
   // Pose thresholds (normalized to hand size, so distance-from-camera doesn't matter)
   PINCH_THRESHOLD: 0.16,   // raise this if pinch still won't trigger, lower it if it fires too easily
-  FINGER_EXTEND_RATIO: 1.15,
+  PINCH_ENGAGE_RATIO: 0.72, // pinch must close to (THRESHOLD * this) to START, but only needs to
+                             // open back past the full THRESHOLD to RELEASE - this hysteresis band
+                             // stops pinch flickering on/off when your fingers hover near the boundary
+  FINGER_STRAIGHT_ANGLE_DEG: 150,  // joint-bend angle above which a finger counts as "extended" -
+                                     // angle-based detection is far more robust to hand rotation
+                                     // than the old wrist-distance heuristic
+  THUMB_STRAIGHT_ANGLE_DEG: 140,
+  HOLD_MISS_TOLERANCE: 2,   // consecutive off-frames a hold-to-fire gesture tolerates before resetting
 
   // Interaction sensitivity
   ROTATE_SENSITIVITY: 6.0,   // radians per full normalized-frame movement
@@ -23,8 +30,10 @@ export const CONFIG = {
   SWIPE_HISTORY_FRAMES: 6,
   SWIPE_COOLDOWN: 0.8,
 
-  // Fist-hold reset / two-fist full reset
+  // Fist-hold reset / two-fist full reset / peace-hold native toggle / three-finger-hold screenshot
   RESET_HOLD_DURATION: 0.7,
+  PEACE_HOLD_DURATION: 0.6,
+  THREE_FINGER_HOLD_DURATION: 0.6,
 
   // Thumb tick (color cycling) + general gesture debounce
   GESTURE_COOLDOWN: 0.5,
