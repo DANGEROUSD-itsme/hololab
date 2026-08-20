@@ -40,6 +40,8 @@
       <div class="row"><span>TRACKING</span><span id="trackState" class="val val--pending">—</span></div>
       <div class="row"><span>HANDS</span><span id="handCount" class="val">0</span></div>
       <div class="row"><span>MODE</span><span id="modeState" class="val">IDLE</span></div>
+      <div class="row"><span>THEME</span><span id="themeState" class="val">CYAN</span></div>
+      <div class="row"><span>FPS</span><span id="fpsState" class="val">—</span></div>
       <div class="row"><span>PINCH DIST</span><span id="pinchDebug" class="val">—</span></div>
     </section>
 
@@ -48,14 +50,29 @@
       <div class="row"><span>pinch + move</span><span class="dim">rotate</span></div>
       <div class="row"><span>2-hand pinch, spread</span><span class="dim">scale</span></div>
       <div class="row"><span>2-hand pinch, shift</span><span class="dim">pan</span></div>
-      <div class="row"><span>open palm swipe</span><span class="dim">next model</span></div>
-      <div class="row"><span>hold fist</span><span class="dim">reset</span></div>
-      <div class="row"><span>drop a .glb / .3mf</span><span class="dim">load model</span></div>
+      <div class="row"><span>quick double-pinch</span><span class="dim">ping burst</span></div>
+      <div class="row"><span>open palm, swipe ↔</span><span class="dim">next/prev model</span></div>
+      <div class="row"><span>open palm, swipe ↕</span><span class="dim">toggle HUD</span></div>
+      <div class="row"><span>thumb up/down tap</span><span class="dim">cycle color</span></div>
+      <div class="row"><span>hold 1 fist</span><span class="dim">reset view</span></div>
+      <div class="row"><span>hold 2 fists</span><span class="dim">full reset</span></div>
+      <div class="row"><span>drop a model file</span><span class="dim">load it</span></div>
+      <div class="row"><span>press ?</span><span class="dim">full help</span></div>
     </section>
 
     <footer class="telemetry">
       <span id="telemetryText">AWAITING CAMERA ACCESS</span>
     </footer>
+
+    <div id="toastContainer" class="toast-container"></div>
+
+    <div class="toolbar">
+      <button id="muteBtn" class="tool-btn" title="Toggle ambient sound">🔊</button>
+      <button id="fullscreenBtn" class="tool-btn" title="Toggle fullscreen">⛶</button>
+      <button id="screenshotBtn" class="tool-btn" title="Save a screenshot (S)">📷</button>
+      <button id="helpBtn" class="tool-btn" title="Show all controls (?)">?</button>
+    </div>
+    <div class="credit">MADE BY DHEERA JAYACHITRA &amp; CLAUDE</div>
 
     <div id="startOverlay" class="start-overlay">
       <div class="start-box">
@@ -63,6 +80,62 @@
         <h1>HOLOLAB</h1>
         <p>Air-gesture control for a floating 3D hologram.<br/>Requires camera access.</p>
         <button id="startBtn">ENGAGE</button>
+        <div class="credit-inline">by Dheera Jayachitra &amp; Claude</div>
+      </div>
+    </div>
+
+    <div id="calibrateOverlay" class="start-overlay hidden">
+      <div class="start-box">
+        <div class="mark big">◈</div>
+        <h1>CALIBRATE</h1>
+        <p>Hold a pinch — thumb and index finger together — in front of the camera for a couple of seconds.</p>
+        <div class="calib-readout">
+          <span>closest pinch:</span>
+          <span id="calibValue">—</span>
+        </div>
+        <div class="calib-actions">
+          <button id="calibDoneBtn">USE THIS</button>
+          <button id="calibSkipBtn" class="secondary">SKIP</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="helpOverlay" class="start-overlay hidden">
+      <div class="start-box help-box">
+        <div class="mark big">◈</div>
+        <h1>ALL CONTROLS</h1>
+        <div class="help-grid">
+          <div class="help-col">
+            <div class="help-heading">HAND</div>
+            <div class="row"><span>Pinch (1 hand) + move</span><span class="dim">rotate</span></div>
+            <div class="row"><span>Pinch (2 hands), spread</span><span class="dim">scale</span></div>
+            <div class="row"><span>Pinch (2 hands), shift</span><span class="dim">pan</span></div>
+            <div class="row"><span>Quick double-pinch</span><span class="dim">ping burst</span></div>
+            <div class="row"><span>Open palm, swipe left/right</span><span class="dim">next/prev model</span></div>
+            <div class="row"><span>Open palm, swipe up/down</span><span class="dim">toggle HUD panels</span></div>
+            <div class="row"><span>Thumb up tap</span><span class="dim">next color theme</span></div>
+            <div class="row"><span>Thumb down tap</span><span class="dim">previous color theme</span></div>
+            <div class="row"><span>Hold 1 fist (~0.7s)</span><span class="dim">reset view</span></div>
+            <div class="row"><span>Hold 2 fists (~0.7s)</span><span class="dim">full reset (view + color + model)</span></div>
+          </div>
+          <div class="help-col">
+            <div class="help-heading">FILES</div>
+            <div class="row"><span>Drop .glb / .gltf-bin</span><span class="dim">load model</span></div>
+            <div class="row"><span>Drop .3mf</span><span class="dim">load model</span></div>
+            <div class="row"><span>Drop .obj</span><span class="dim">load model</span></div>
+            <div class="row"><span>Drop .fbx</span><span class="dim">load model</span></div>
+            <div class="row"><span>Drop .stl</span><span class="dim">load model</span></div>
+            <div class="row"><span>Drop .ply</span><span class="dim">load model</span></div>
+            <div class="help-heading" style="margin-top:14px">KEYBOARD</div>
+            <div class="row"><span>?</span><span class="dim">toggle this help</span></div>
+            <div class="row"><span>S</span><span class="dim">save screenshot</span></div>
+            <div class="row"><span>F</span><span class="dim">toggle fullscreen</span></div>
+            <div class="row"><span>M</span><span class="dim">toggle sound</span></div>
+            <div class="row"><span>C</span><span class="dim">next color theme</span></div>
+            <div class="row"><span>R</span><span class="dim">reset view</span></div>
+          </div>
+        </div>
+        <button id="helpCloseBtn" style="margin-top:20px">CLOSE</button>
       </div>
     </div>
   </div>

@@ -250,3 +250,133 @@ html, body {
   .status { min-width: 160px; font-size: 12px; }
   .hud-title { font-size: 16px; letter-spacing: 3px; }
 }
+
+/* credit */
+.credit {
+  position: absolute;
+  bottom: 24px;
+  left: 24px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--cyan-dim, #6fb3c2);
+  opacity: 0.6;
+}
+.credit-inline {
+  margin-top: 18px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--cyan-core);
+  opacity: 0.55;
+}
+
+/* toolbar (mute / fullscreen / screenshot / help) */
+.toolbar {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  display: flex;
+  gap: 8px;
+  pointer-events: all;
+}
+.tool-btn {
+  background: transparent;
+  border: 1px solid var(--cyan-dim);
+  color: var(--cyan-core);
+  width: 34px;
+  height: 34px;
+  border-radius: 2px;
+  font-size: 15px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.tool-btn:hover { opacity: 1; background: rgba(95, 225, 242, 0.08); }
+
+/* toast notifications */
+.toast-container {
+  position: absolute;
+  bottom: 76px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.toast {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: var(--white-hot);
+  background: rgba(5, 10, 18, 0.75);
+  border: 1px solid var(--cyan-dim);
+  padding: 6px 16px;
+  border-radius: 2px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  box-shadow: 0 0 10px var(--cyan-glow);
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+
+/* help overlay grid */
+.help-box { max-width: 640px; }
+.help-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+  text-align: left;
+  margin-top: 10px;
+}
+.help-col .row {
+  font-size: 12px;
+  padding: 3px 0;
+}
+.help-heading {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: var(--cyan-core);
+  opacity: 0.7;
+  margin-bottom: 6px;
+}
+@media (max-width: 720px) {
+  .help-grid { grid-template-columns: 1fr; }
+}
+
+/* drag-and-drop visual feedback */
+body.drag-active #scene {
+  outline: 3px dashed var(--cyan-core);
+  outline-offset: -3px;
+}
+
+/* calibration overlay extras */
+.calib-readout {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 20px;
+  color: var(--white-hot);
+  margin-bottom: 22px;
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+.calib-readout span:first-child {
+  font-size: 12px;
+  color: var(--cyan-core);
+  opacity: 0.7;
+  align-self: center;
+}
+.calib-actions {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+}
+.calib-actions button.secondary {
+  background: transparent;
+  color: var(--cyan-core);
+  border: 1px solid var(--cyan-dim);
+  box-shadow: none;
+}

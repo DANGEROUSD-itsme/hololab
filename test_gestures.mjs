@@ -15,7 +15,7 @@ function check(label, cond) {
 // Builds a synthetic 21-point hand. index_ext/middle_ext/etc control whether
 // that finger's tip sits far from the wrist (extended) or folds back (curled).
 function makeHand({ wristX = 0.5, wristY = 0.9, indexExt = false, middleExt = false,
-                     ringExt = false, pinkyExt = false, pinch = false } = {}) {
+                     ringExt = false, pinkyExt = false, thumbExt = false, pinch = false } = {}) {
   const lm = new Array(21).fill(null).map(() => ({ x: 0, y: 0, z: 0 }));
   lm[0] = { x: wristX, y: wristY, z: 0 };
 
@@ -30,7 +30,9 @@ function makeHand({ wristX = 0.5, wristY = 0.9, indexExt = false, middleExt = fa
   setFinger(17, 18, 20, pinkyExt, -0.04);
 
   lm[3] = { x: wristX - 0.08, y: wristY - 0.03, z: 0 };
-  lm[4] = pinch ? { x: lm[8].x, y: lm[8].y, z: 0 } : { x: wristX - 0.03, y: wristY - 0.03, z: 0 };
+  lm[4] = pinch
+    ? { x: lm[8].x, y: lm[8].y, z: 0 }
+    : { x: wristX - (thumbExt ? 0.16 : 0.03), y: wristY - 0.03, z: 0 };
 
   return lm;
 }
@@ -123,4 +125,92 @@ check("open palm is not a pinch", classifyHandPose(openPalmLm).pinching === fals
 }
 
 console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} TEST(S) FAILED`);
+
+// ---------- thumb tick (color cycle) ----------
+{
+  const engine = new GestureEngine(CONFIG);
+  const thumbUp = makeHand({ thumbExt: true, wristY: 0.5 }); // tip above wrist -> "up"
+  const ev = engine.update([classifyHandPose(thumbUp)], 0.0);
+  check("thumb-only pose fires colorCycle", ev.colorCycle === "up");
+}
+{
+  // thumb down: need tip BELOW wrist. Our makeHand always places thumb tip
+  // above wrist when extended, so build a custom hand with thumb pointing down.
+  const lm = makeHand({ thumbExt: true, wristY: 0.5 });
+  // flip the thumb tip below the wrist to simulate "thumbs down"
+  lm[4] = { x: lm[4].x, y: 0.5 + 0.03, z: 0 };
+  const engine = new GestureEngine(CONFIG);
+  const ev = engine.update([classifyHandPose(lm)], 0.0);
+  check("thumb pointing down fires colorCycle 'down'", ev.colorCycle === "down");
+}
+{
+  // cooldown: second thumb tick immediately after should NOT refire
+  const engine = new GestureEngine(CONFIG);
+  const thumbUp = makeHand({ thumbExt: true, wristY: 0.5 });
+  engine.update([classifyHandPose(thumbUp)], 0.0);
+  const ev2 = engine.update([classifyHandPose(thumbUp)], 0.05);
+  check("thumb tick respects cooldown (no immediate refire)", ev2.colorCycle === null);
+}
+
+// ---------- double-pinch "ping" ----------
+{
+  const engine = new GestureEngine(CONFIG);
+  const pinchHand = makeHand({ indexExt: true, pinch: true, wristX: 0.5 });
+  const openHand = makeHand({ indexExt: true, middleExt: true, ringExt: true, pinkyExt: true, wristX: 0.5 });
+
+  engine.update([classifyHandPose(pinchHand)], 0.0);   // pinch starts
+  engine.update([classifyHandPose(openHand)], 0.1);    // release
+  const ev = engine.update([classifyHandPose(pinchHand)], 0.2); // re-pinch quickly -> ping
+  check("quick double-pinch fires ping", ev.ping === true);
+}
+{
+  const engine = new GestureEngine(CONFIG);
+  const pinchHand = makeHand({ indexExt: true, pinch: true, wristX: 0.5 });
+  const openHand = makeHand({ indexExt: true, middleExt: true, ringExt: true, pinkyExt: true, wristX: 0.5 });
+
+  engine.update([classifyHandPose(pinchHand)], 0.0);
+  engine.update([classifyHandPose(openHand)], 0.1);
+  // wait past the double-pinch window before re-pinching
+  const ev = engine.update([classifyHandPose(pinchHand)], 2.0);
+  check("slow re-pinch does NOT fire ping", ev.ping === false);
+}
+
+// ---------- two-hand fist -> full reset ----------
+{
+  const engine = new GestureEngine(CONFIG);
+  let fired = false;
+  for (let i = 0; i < 20; i++) {
+    const left = makeHand({ wristX: 0.3 });
+    const right = makeHand({ wristX: 0.7 });
+    const ev = engine.update([classifyHandPose(left), classifyHandPose(right)], i * 0.1);
+    if (ev.fullReset) fired = true;
+  }
+  check("held two-hand fist fires fullReset", fired === true);
+}
+{
+  // single-hand fist should still fire the regular (non-full) reset, not fullReset
+  const engine = new GestureEngine(CONFIG);
+  let reset = false, fullReset = false;
+  for (let i = 0; i < 20; i++) {
+    const hand = makeHand({ wristX: 0.5 });
+    const ev = engine.update([classifyHandPose(hand)], i * 0.1);
+    if (ev.reset) reset = true;
+    if (ev.fullReset) fullReset = true;
+  }
+  check("single-hand fist fires reset but not fullReset", reset === true && fullReset === false);
+}
+
+// ---------- vertical swipe ----------
+{
+  const engine = new GestureEngine(CONFIG);
+  let fired = null;
+  for (let i = 0; i < 6; i++) {
+    const hand = makeHand({ indexExt: true, middleExt: true, ringExt: true, pinkyExt: true, wristX: 0.5, wristY: 0.2 + i * 0.15 });
+    const ev = engine.update([classifyHandPose(hand)], i * 0.03);
+    if (ev.swipeVertical) fired = ev.swipeVertical;
+  }
+  check("fast vertical open-palm sweep fires swipeVertical", fired === "down");
+}
+
+console.log(failures === 0 ? "\nALL TESTS PASSED (extended)" : `\n${failures} TEST(S) FAILED (extended)`);
 process.exit(failures === 0 ? 0 : 1);
