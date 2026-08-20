@@ -20,6 +20,7 @@ export const CONFIG = {
   // Interaction sensitivity
   ROTATE_SENSITIVITY: 6.0,   // radians per full normalized-frame movement
   PAN_SENSITIVITY: 3.5,
+  TWO_HAND_ROTATE_SENSITIVITY: 1.5,  // how much model pitch rotation per radian of hand-angle change
   SCALE_MIN: 0.35,
   SCALE_MAX: 3.5,
 
@@ -38,6 +39,7 @@ export const CONFIG = {
   RESET_HOLD_DURATION: 0.7,
   PEACE_HOLD_DURATION: 0.6,
   THREE_FINGER_HOLD_DURATION: 0.6,
+  WEAR_HOLD_DURATION: 0.6,
 
   // Thumb tick (color cycling) + general gesture debounce
   GESTURE_COOLDOWN: 0.5,

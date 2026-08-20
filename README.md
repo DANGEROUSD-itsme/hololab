@@ -33,6 +33,7 @@ need to do this once.
 | One hand, pinch thumb+index, move | Rotate the hologram (momentum on release) |
 | Two hands, both pinched, spread apart/together | Scale up/down |
 | Two hands, both pinched, move together | Pan (also has momentum) |
+| Two hands, both pinched, one rises as the other falls | Tumble the model forward/backward — like turning a steering wheel |
 | Quick double-pinch (pinch, release, pinch again fast) | Ping — particle burst |
 | Open palm, fast horizontal swipe | Cycle to next/previous model |
 | Open palm, fast vertical swipe | Show/hide the HUD panels |
@@ -40,6 +41,7 @@ need to do this once.
 | Rock sign 🤟 (index+pinky), tap | Toggle fullscreen |
 | Shaka 🤙 (thumb+pinky), tap | Toggle mute |
 | Three fingers (index+middle+ring), held ~0.6s | Save screenshot |
+| Open palm, held still ~0.6s | Wear the hologram on your hand (it follows your hand) / take it off |
 | Fist (either hand) | Instantly stops all rotation/pan — like grabbing the hologram to still it |
 | Fist, held ~0.7s | Reset view (rotation/scale/pan) |
 | Both hands as fists, held ~0.7s | Full reset — view, color, and model all back to default |
@@ -56,10 +58,37 @@ need to do this once.
 | `C` | Next color theme |
 | `Shift+C` | Previous color theme |
 | `R` | Reset view |
+| `]` | Next model |
+| `[` | Previous model |
+| `V` | Enlarge/shrink the camera preview |
 
-The toolbar top-right (🔊 ⛶ 📷 ?) does the same things with clicks.
+The toolbar top-right (🔊 ⛶ 🔍 📷 ?) does the same things with clicks.
 
 ## What's new in this pass
+
+**Two-hand "steering wheel" tumble**
+- Pinch with both hands, then move one up while the other moves down (like turning a big invisible steering wheel toward you). The model tumbles forward/backward to match. This works alongside scale and pan in the same two-hand-pinch gesture — spread/shift/steer are all independent and can be combined fluidly, like handling a real object with both hands.
+- Fixed a subtlety this surfaced: MediaPipe doesn't guarantee which hand reports first when two hands are visible, and a direction-sensitive gesture like this would flip 180° if that order swapped between frames. The two pinch points are now ordered by hand identity (left/right) before computing the steering angle, so the rotation direction stays consistent regardless of detection order — tested by simulating the exact same physical motion with the array order swapped mid-gesture.
+
+**Uploaded models persist across a page refresh**
+- Drop in a model and it now survives a reload — restored automatically the moment the page comes back up. It clears when you actually close the tab (this uses the browser's session storage, which is built for exactly this: alive across refreshes, gone when the tab closes). Files over ~4MB skip persistence with a console note, to stay safely under the browser's storage quota — they'll still load fine for your current session, just need re-dropping after a refresh.
+
+**Your own model, bundled in**
+- Your webshooter model ships with the project now (`models/webshooter_V4.glb`) as a sixth built-in — cycle to it the same way as any other model, no need to drag-and-drop it back in every time.
+
+**Easier model switching**
+- `]` / `[` cycle to the next/previous model directly from the keyboard, alongside the existing swipe gesture.
+
+**Wear it**
+- Hold an open palm *still* for about half a second and the hologram attaches to your hand — it shrinks down and follows your hand's position in real time, like a worn holographic device. Hold an open palm still again to take it off and set it back down. (This is deliberately a *held-still* open palm, distinct from the *fast-moving* open palm that triggers a model swipe — tested that the two never trigger each other.)
+
+**Bigger camera preview**
+- Click the 🔍 button in the toolbar, or press `V`, to enlarge the camera preview — it was pretty small by default. Press again to shrink it back.
+
+**Proactive debug pass (found by code audit, not yet a reported symptom)**
+- **Hand-identity stability**: MediaPipe doesn't guarantee the same physical hand stays at the same array index frame-to-frame when two hands are visible — it can reorder them. Pinch hysteresis is now keyed by hand identity (handedness) instead of array position, so it can't leak state onto the wrong hand. Single-hand gestures (swipe, rock/shaka taps, peace/three-finger holds) now also require exactly one hand in frame, since a sudden hand reordering could otherwise look like a huge instantaneous position jump and falsely trigger a swipe, or cause a held gesture to flicker between hands.
+- **Memory leaks fixed**: swapping models (cycling built-ins, or dropping a new file) never freed the outgoing model's GPU resources — geometries, materials, textures all leaked on every single swap. Also, the ambient grid's rebuild-on-theme-change was calling a `.dispose()` that silently didn't exist on that object type, so every color cycle leaked too. Both fixed — matters most exactly for what you're doing right now (testing lots of uploads back to back).
+- **Audio failures no longer masquerade as camera failures**: if sound initialization ever threw for any reason, it was caught by the same error handler as camera permission failures, so you'd see "Camera access failed" even though the camera worked fine. Audio failures are now isolated — the app just continues without sound.
 
 **Tracking accuracy — the "mis-understanding" fix**
 - Finger extension used to be judged by comparing distances from the wrist, which is sensitive to how your hand is angled toward the camera — tilt your hand and a curled finger could read as extended. It's now judged by the actual joint bend angle (using the hand's full 3D landmark data), which stays accurate across a much wider range of hand orientations.
@@ -77,9 +106,7 @@ The toolbar top-right (🔊 ⛶ 📷 ?) does the same things with clicks.
 - The thumb up/down tap gesture for color cycling has been removed — it's now `C` (next) / `Shift+C` (previous) only. This also frees up the thumb-only pose so it can't be misread from an incidental hand position.
 
 **Fist now brakes instantly**
-- Making a fist used to do nothing until you'd held it for ~0.7s (the reset trigger). Now it acts as an instant grab-and-stop — the moment you fist, any spinning/panning momentum halts immediately, exactly like grabbing a spinning object to still it. Keep holding the fist and it still resets after ~0.7s, same as before — the instant stop and the delayed reset are two stages of the same gesture.
-
-**Held gestures now require actual stillness**
+- Making a fist used to do nothing until you'd held it for ~0.7s (the reset trigger). Now it acts as an instant grab-and-stop — the moment you fist, any spinning/panning momentum halts immediately, exactly like grabbing a spinning object to still it. Keep holding the fist and it still resets after ~0.7s, same as before — the instant stop and the delayed reset are two stages of the same gesture.**Held gestures now require actual stillness**
 - Raising or moving your hand into frame could pass through a pose's shape for a moment — e.g. the peace sign, since middle and index often straighten before ring and pinky do — and with the hold timer's jitter tolerance, that was enough to accidentally fire reset/native-toggle/screenshot on a hand that was never actually held there on purpose. Reset, full reset, native-materials toggle, and screenshot now only accumulate hold-time while the hand's position is genuinely still; a hand in motion can't trigger them no matter what shape it passes through. (The instant fist-brake above is deliberately exempt from this — a grab-to-stop should work even while your hand is still settling into place.)
 
 **Reliability & persistence (previous pass)**
@@ -121,6 +148,7 @@ The toolbar top-right (🔊 ⛶ 📷 ?) does the same things with clicks.
 
 `config.js` holds every sensitivity number, all commented:
 - `ROTATE_SENSITIVITY` / `PAN_SENSITIVITY` / `SCALE_MIN` / `SCALE_MAX`
+- `TWO_HAND_ROTATE_SENSITIVITY` — how much model tumble per radian of hand-angle change in the two-hand steering gesture.
 - `PINCH_THRESHOLD` — set automatically by calibration; only hand-edit to fine-tune afterward.
 - `PINCH_ENGAGE_RATIO` — the hysteresis band. Lower = pinch needs to close tighter before it registers, but once registered it stays held more loosely.
 - `FINGER_STRAIGHT_ANGLE_DEG` / `THUMB_STRAIGHT_ANGLE_DEG` — the joint-bend angle a finger needs to exceed to count as extended. Raise if fingers register as extended too easily; lower if genuinely straight fingers aren't registering.
@@ -136,7 +164,7 @@ The toolbar top-right (🔊 ⛶ 📷 ?) does the same things with clicks.
 ## Architecture
 
 - `gestures.js` — pure gesture math and the `GestureEngine` state machine (every pose classification and event: rotate, scale, pan, swipe (both axes), reset, full reset, color cycle, ping). No Three.js or MediaPipe imports, so it's fully unit-testable.
-- `test_gestures.mjs` — Node test suite, 47 checks across every gesture, pose classification, hysteresis, jitter-tolerance, and stillness-gating behavior. Run with `node test_gestures.mjs`.
+- `test_gestures.mjs` — Node test suite, 55 checks across every gesture, pose classification, hysteresis, jitter-tolerance, stillness-gating, and hand-identity stability. Run with `node test_gestures.mjs`.
 - `hand_input.js` — thin wrapper around MediaPipe Tasks Vision (`HandLandmarker`) and `getUserMedia`.
 - `audio.js` — `HoloAudio` class: ambient hum + short WebAudio-synthesized cues, single mute switch.
 - `main.js` — Three.js scene (holographic fresnel material, bloom, ambient rings, particle system), the six file-format loaders, the color theme system, calibration/help/toolbar wiring, and the per-frame loop that ties gesture events to the 3D transform.

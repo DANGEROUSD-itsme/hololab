@@ -123,12 +123,13 @@ function lerp(a, b, t) {
 export class GestureEngine {
   constructor(cfg = CONFIG) {
     this.cfg = cfg;
-    this._pinchState = [false, false]; // per hand-slot hysteresis state
+    this._pinchState = new Map(); // per hand-identity hysteresis state (keyed by handedness, falls back to array slot if unavailable)
     this._lastHandPos = null;
     this._lastHandTime = null;
     this._smoothedSingle = null;
     this._prevTwoHandDist = null;
     this._prevTwoHandCenter = null;
+    this._prevTwoHandAngle = null;
     this._swipeHistory = [];
     this._lastSwipeTime = -Infinity;
     this._lastRockTapTime = -Infinity;
@@ -138,12 +139,13 @@ export class GestureEngine {
   }
 
   reset() {
-    this._pinchState = [false, false];
+    this._pinchState = new Map();
     this._lastHandPos = null;
     this._lastHandTime = null;
     this._smoothedSingle = null;
     this._prevTwoHandDist = null;
     this._prevTwoHandCenter = null;
+    this._prevTwoHandAngle = null;
     this._swipeHistory = [];
     this._wasPinchingSingle = false;
   }
@@ -180,17 +182,46 @@ export class GestureEngine {
     return vel;
   }
 
-  /** Smooths pinch state per hand-slot with a two-threshold hysteresis band. */
+  /** Orders two pinching hands as [Left, Right] by handedness when available,
+   * so direction-sensitive math (the two-hand rotate angle) stays consistent
+   * across frames even if MediaPipe's array order swaps. Falls back to raw
+   * array order when handedness isn't present (e.g. in tests, or if only
+   * one hand reports it). */
+  _orderHandsStable(twoHands) {
+    const [p, q] = twoHands;
+    if (p.handedness && q.handedness && p.handedness !== q.handedness) {
+      return p.handedness === "Left" ? [p, q] : [q, p];
+    }
+    return twoHands;
+  }
+
+  /**
+   * Smooths pinch state per hand-IDENTITY (not array position) with a
+   * two-threshold hysteresis band. Keying by handedness (when available)
+   * means a hand's pinch state stays correctly attached to that physical
+   * hand even if MediaPipe reorders the detection array between frames -
+   * keying by array index instead would let hysteresis state leak onto
+   * the wrong hand whenever two hands are visible and get reordered.
+   * Falls back to array-index keying when handedness isn't provided
+   * (e.g. in tests, or a single tracked hand).
+   */
   _applyPinchHysteresis(poses) {
     const cfg = this.cfg;
     const engageThreshold = cfg.PINCH_THRESHOLD * cfg.PINCH_ENGAGE_RATIO;
+    const seenKeys = new Set();
     poses.forEach((p, i) => {
-      const was = this._pinchState[i] || false;
+      const key = p.handedness || `slot${i}`;
+      seenKeys.add(key);
+      const was = this._pinchState.get(key) || false;
       const nowPinching = was ? p.pinchDist < cfg.PINCH_THRESHOLD : p.pinchDist < engageThreshold;
-      this._pinchState[i] = nowPinching;
+      this._pinchState.set(key, nowPinching);
       p.pinching = nowPinching;
     });
-    for (let i = poses.length; i < 2; i++) this._pinchState[i] = false;
+    // drop stale entries for hands no longer present, so state doesn't
+    // grow unboundedly or linger stale across a hand leaving and returning
+    for (const key of this._pinchState.keys()) {
+      if (!seenKeys.has(key)) this._pinchState.delete(key);
+    }
   }
 
   /**
@@ -202,17 +233,27 @@ export class GestureEngine {
     this._applyPinchHysteresis(poses);
 
     const events = {
-      rotateDelta: null, scale: null, pan: null, swipe: null, swipeVertical: null,
+      rotateDelta: null, scale: null, pan: null, twoHandRotateDelta: null, swipe: null, swipeVertical: null,
       reset: false, fullReset: false, ping: false, brake: false,
-      nativeToggle: false, fullscreenToggle: false, muteToggle: false, screenshot: false,
+      nativeToggle: false, fullscreenToggle: false, muteToggle: false, screenshot: false, wearToggle: false,
       mode: "idle",
     };
 
     const pinchingHands = poses.filter((p) => p.pinching);
     const primary = poses[0] || null;
+    // Single-hand-only gestures (swipe, taps, most holds) require EXACTLY one
+    // tracked hand. This isn't just a style choice: MediaPipe doesn't guarantee
+    // stable hand identity/ordering frame-to-frame when two hands are visible -
+    // "poses[0]" can silently become a different physical hand between frames.
+    // With two hands in frame, that reordering could look like a huge sudden
+    // jump in position (falsely triggering a swipe) or a gesture flickering
+    // between hands. Restricting to exactly one visible hand sidesteps the
+    // whole class of bugs - it only pauses these gestures while your other
+    // hand is also in frame, which is a small, predictable trade-off.
+    const onlyOneHand = poses.length === 1;
 
-    // ---- swipe (both axes), tap gestures: use the first tracked hand ----
-    if (primary) {
+    // ---- swipe (both axes), tap gestures: single hand only, see above ----
+    if (primary && onlyOneHand) {
       this._swipeHistory.push({ t: now, x: primary.center.x, y: primary.center.y });
       while (this._swipeHistory.length > cfg.SWIPE_HISTORY_FRAMES) this._swipeHistory.shift();
 
@@ -247,7 +288,7 @@ export class GestureEngine {
     }
 
     // ---- hold-to-fire gestures (jitter-tolerant) ----
-    const singleFist = !!(primary && primary.fist && poses.length === 1);
+    const singleFist = !!(primary && primary.fist && onlyOneHand);
     const twoFist = poses.length === 2 && poses.every((p) => p.fist);
     events.brake = singleFist || twoFist; // instant: true every frame a fist is held, no delay - deliberately NOT stillness-gated, since a grab-to-stop should work even while the hand is still settling into place
 
@@ -262,17 +303,29 @@ export class GestureEngine {
 
     events.reset = this._hold("fist", singleFist && isStill, now, cfg.RESET_HOLD_DURATION);
     events.fullReset = this._hold("twoFist", twoFist && isStill, now, cfg.RESET_HOLD_DURATION);
-    events.nativeToggle = this._hold("peace", !!(primary && primary.peace) && isStill, now, cfg.PEACE_HOLD_DURATION);
-    events.screenshot = this._hold("threeFinger", !!(primary && primary.threeFinger) && isStill, now, cfg.THREE_FINGER_HOLD_DURATION);
+    events.nativeToggle = this._hold("peace", !!(primary && primary.peace) && onlyOneHand && isStill, now, cfg.PEACE_HOLD_DURATION);
+    events.screenshot = this._hold("threeFinger", !!(primary && primary.threeFinger) && onlyOneHand && isStill, now, cfg.THREE_FINGER_HOLD_DURATION);
+    // open palm HELD STILL (as opposed to the fast-moving open palm that
+    // triggers swipe) toggles "wearing" the hologram on your hand - it
+    // then follows your hand's position every frame until toggled off.
+    events.wearToggle = this._hold("wear", !!(primary && primary.openPalm) && onlyOneHand && isStill, now, cfg.WEAR_HOLD_DURATION);
 
-    // ---- two-hand pinch: scale + pan ----
+    // ---- two-hand pinch: scale + pan + "steering wheel" rotate ----
     if (pinchingHands.length === 2) {
-      const [a, b] = pinchingHands;
+      // Scale and pan are symmetric (distance, average) so hand order doesn't
+      // matter for them - but the ANGLE between the two pinch points (used for
+      // rotate below) flips 180° if the array order swaps between frames,
+      // which MediaPipe doesn't guarantee against. Order by handedness first
+      // so the angle's direction stays consistent across frames; falls back
+      // to raw array order when handedness isn't available (e.g. in tests).
+      const [a, b] = this._orderHandsStable(pinchingHands);
       const currDist = dist2D(a.pinchPoint, b.pinchPoint);
       const currCenter = {
         x: (a.pinchPoint.x + b.pinchPoint.x) / 2,
         y: (a.pinchPoint.y + b.pinchPoint.y) / 2,
       };
+      const currAngle = Math.atan2(b.pinchPoint.y - a.pinchPoint.y, b.pinchPoint.x - a.pinchPoint.x);
+
       if (this._prevTwoHandDist !== null) {
         events.scale = currDist / Math.max(this._prevTwoHandDist, 1e-6);
       }
@@ -282,13 +335,24 @@ export class GestureEngine {
           dy: (currCenter.y - this._prevTwoHandCenter.y) * cfg.PAN_SENSITIVITY,
         };
       }
+      if (this._prevTwoHandAngle !== null) {
+        // one hand rising while the other falls (a "steering wheel" turn)
+        // changes this angle - map that change directly to a forward/backward
+        // tumble of the model, same pitch axis single-hand rotate also drives.
+        let deltaAngle = currAngle - this._prevTwoHandAngle;
+        if (deltaAngle > Math.PI) deltaAngle -= Math.PI * 2;
+        if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2;
+        events.twoHandRotateDelta = deltaAngle * cfg.TWO_HAND_ROTATE_SENSITIVITY;
+      }
       this._prevTwoHandDist = currDist;
       this._prevTwoHandCenter = currCenter;
+      this._prevTwoHandAngle = currAngle;
       this._smoothedSingle = null;
       events.mode = "scale_pan";
     } else {
       this._prevTwoHandDist = null;
       this._prevTwoHandCenter = null;
+      this._prevTwoHandAngle = null;
 
       // ---- single-hand pinch: rotate (+ double-pinch "ping" detection) ----
       if (pinchingHands.length === 1) {

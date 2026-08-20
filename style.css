@@ -39,6 +39,16 @@ html, body {
   opacity: 0.55;
   z-index: 5;
   filter: saturate(0.6) brightness(0.9);
+  transition: width 0.25s ease, height 0.25s ease, opacity 0.25s ease;
+}
+#cam.cam-large {
+  width: 480px;
+  height: 360px;
+  opacity: 0.9;
+  filter: saturate(0.85) brightness(1);
+}
+@media (max-width: 720px) {
+  #cam.cam-large { width: 260px; height: 195px; }
 }
 
 #hud {

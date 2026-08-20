@@ -34,6 +34,7 @@ const helpCloseBtn = document.getElementById("helpCloseBtn");
 const muteBtn = document.getElementById("muteBtn");
 const fullscreenBtn = document.getElementById("fullscreenBtn");
 const screenshotBtn = document.getElementById("screenshotBtn");
+const camSizeBtn = document.getElementById("camSizeBtn");
 const camState = document.getElementById("camState");
 const trackState = document.getElementById("trackState");
 const handCountEl = document.getElementById("handCount");
@@ -133,7 +134,14 @@ scene.add(fillLight);
 
 let grid = null;
 function rebuildGrid(colorHex, dimHex) {
-  if (grid) { scene.remove(grid); grid.dispose?.(); }
+  if (grid) {
+    scene.remove(grid);
+    // GridHelper (a LineSegments) has no .dispose() of its own - only its
+    // geometry and material do. This runs on every theme change, so without
+    // this it leaked a geometry+material pair on every single color cycle.
+    grid.geometry?.dispose();
+    grid.material?.dispose();
+  }
   grid = new THREE.GridHelper(20, 40, colorHex, dimHex);
   grid.position.y = -1.8;
   grid.material.transparent = true;
@@ -186,6 +194,40 @@ function makeFresnelMaterial(colorHex) {
 }
 
 let edgeMaterial = new THREE.LineBasicMaterial({ color: THEMES[0].core, transparent: true, opacity: 0.55 });
+
+const TEXTURE_MAP_KEYS = ["map", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap",
+  "aoMap", "bumpMap", "displacementMap", "alphaMap", "envMap", "lightMap", "specularMap"];
+
+function disposeMaterial(material) {
+  if (!material || material === edgeMaterial) return; // edgeMaterial is shared across every model - never dispose it
+  TEXTURE_MAP_KEYS.forEach((key) => { if (material[key]?.isTexture) material[key].dispose(); });
+  material.dispose();
+}
+
+/** Frees GPU resources (geometry, materials, textures) for an outgoing model
+ * before it's discarded. Without this, swapping models (built-in cycling,
+ * or repeated file drops) leaks VRAM on every single swap - remove() only
+ * detaches from the scene graph, it doesn't free anything. */
+function disposeObject3D(root) {
+  if (!root) return;
+  root.traverse((child) => {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (Array.isArray(child.material)) child.material.forEach(disposeMaterial);
+      else disposeMaterial(child.material);
+    }
+  });
+}
+
+/** Original (pre-hologram-skin) materials for a dropped scene-graph model are
+ * kept in currentOriginalMaterials for native-mode toggling - dispose those
+ * too, since when hologram mode is active they're not attached anywhere in
+ * the object graph and disposeObject3D() above won't reach them. */
+function disposeOriginalMaterials() {
+  if (currentOriginalMaterials) {
+    currentOriginalMaterials.forEach((mat) => disposeMaterial(mat));
+  }
+}
 
 function triangleCount(geometry) {
   if (geometry.index) return geometry.index.count / 3;
@@ -256,18 +298,79 @@ function helixGeometry() {
   return new THREE.TubeGeometry(curve, 200, 0.045, 8, false);
 }
 
+// ---------------------------------------------------------------------------
+// GLTF / 3MF / OBJ / FBX / STL / PLY loaders (used by both drag-and-drop and
+// any bundled-file built-in model). Declared before MODEL_DEFS/loadBuiltinModel
+// below, even though only the synchronous built-ins run at startup, so an
+// async (url-based) built-in can never risk being reordered into a
+// temporal-dead-zone reference down the line.
+// ---------------------------------------------------------------------------
+const gltfLoader = new GLTFLoader();
+// Many real-world .glb/.gltf files ship with Draco or Meshopt mesh
+// compression (common export optimizations) - without decoders wired up,
+// GLTFLoader just throws and refuses to load, which was very likely the
+// actual cause of "uploads not working."
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/");
+gltfLoader.setDRACOLoader(dracoLoader);
+gltfLoader.setMeshoptDecoder(MeshoptDecoder);
+const threeMFLoader = new ThreeMFLoader();
+const objLoader = new OBJLoader();
+const fbxLoader = new FBXLoader();
+const stlLoader = new STLLoader();
+const plyLoader = new PLYLoader();
+
+/** Fits an object into a consistent ~2.2-unit bounding size and centers it -
+ * shared by every model source (procedural, dropped files, bundled glb
+ * built-ins) so they all land at the same visual scale. */
+function normalizeAndCenter(obj, label) {
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const rawMax = Math.max(size.x, size.y, size.z);
+  if (!isFinite(rawMax) || rawMax <= 0) {
+    toast(`${label}: loaded but appears to contain no visible geometry`);
+  }
+  const maxDim = isFinite(rawMax) && rawMax > 0 ? rawMax : 1;
+  const scale = 2.2 / maxDim;
+  obj.scale.setScalar(scale);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  if (isFinite(center.x) && isFinite(center.y) && isFinite(center.z)) {
+    obj.position.sub(center.multiplyScalar(scale));
+  }
+}
+
+/** Applies the hologram skin to a dropped/bundled scene-graph model and
+ * captures its original materials for native-mode toggling. Shared by the
+ * drop pipeline and any bundled-glb built-in model. */
+function skinAndCaptureOriginals(obj, label) {
+  currentOriginalMaterials = new Map();
+  obj.traverse((child) => { if (child.isMesh) currentOriginalMaterials.set(child, child.material); });
+  const skin = applyHologramSkin(obj);
+  currentFresnelMaterials = skin.materials;
+  if (!skin.addedEdges) {
+    toast(`${label}: high detail — wireframe skipped for performance`);
+  }
+}
+
 const MODEL_DEFS = [
   { name: "ARC LATTICE", build: () => buildModelMesh(new THREE.IcosahedronGeometry(1.15, 1)) },
   { name: "KNOT CORE", build: () => buildModelMesh(new THREE.TorusKnotGeometry(0.75, 0.24, 90, 12)) },
   { name: "DODEC FRAME", build: () => buildModelMesh(new THREE.DodecahedronGeometry(1.2, 0)) },
   { name: "HELIX COIL", build: () => buildModelMesh(helixGeometry()) },
   { name: "ORB", build: () => buildModelMesh(new THREE.IcosahedronGeometry(1.1, 3)) },
+  { name: "WEBSHOOTER", url: "models/webshooter_V4.glb" },
 ];
 let modelIndex = 0;
 let currentMesh = null;
 
 function loadBuiltinModel(index) {
-  if (currentMesh) modelGroup.remove(currentMesh);
+  if (currentMesh) {
+    modelGroup.remove(currentMesh);
+    disposeObject3D(currentMesh);
+  }
+  disposeOriginalMaterials();
   nativeMode = false;
   currentOriginalMaterials = null;
   keyLight.intensity = 0;
@@ -275,11 +378,51 @@ function loadBuiltinModel(index) {
   ambientLight.intensity = 0.15;
   rimLight.intensity = 2.0;
   modelIndex = ((index % MODEL_DEFS.length) + MODEL_DEFS.length) % MODEL_DEFS.length;
-  currentMesh = MODEL_DEFS[modelIndex].build();
-  currentFresnelMaterials = [currentMesh.children[0].material];
-  modelGroup.add(currentMesh);
-  applyThemeVisuals();
-  telemetryEl.textContent = `MODEL: ${MODEL_DEFS[modelIndex].name}`;
+  const def = MODEL_DEFS[modelIndex];
+  const requestedIndex = modelIndex;
+
+  if (def.build) {
+    currentMesh = def.build();
+    currentFresnelMaterials = [currentMesh.children[0].material];
+    modelGroup.add(currentMesh);
+    applyThemeVisuals();
+    telemetryEl.textContent = `MODEL: ${def.name}`;
+    audio.chime();
+    toast(`MODEL: ${def.name}`);
+  } else if (def.url) {
+    // async: a bundled real model file, loaded the same way a dropped file would be
+    currentMesh = null; // previous mesh already disposed above; scene shows nothing extra until this resolves
+    telemetryEl.textContent = `LOADING ${def.name}…`;
+    toast(`LOADING ${def.name}…`);
+    gltfLoader.load(
+      def.url,
+      (gltf) => {
+        if (modelIndex !== requestedIndex) return; // user cycled away before this finished - discard
+        const obj = gltf.scene;
+        skinAndCaptureOriginals(obj, def.name);
+        normalizeAndCenter(obj, def.name);
+        currentMesh = obj;
+        modelGroup.add(currentMesh);
+        applyThemeVisuals();
+        telemetryEl.textContent = `MODEL: ${def.name}`;
+        audio.chime();
+        toast(`MODEL: ${def.name}`);
+      },
+      undefined,
+      (err) => {
+        if (modelIndex !== requestedIndex) return;
+        reportLoadError(def.name, err);
+      }
+    );
+  }
+}
+
+/** Cycle the built-in model list by +1/-1. All feedback (toast, audio,
+ * telemetry) is handled inside loadBuiltinModel itself - it has to be,
+ * since some entries load asynchronously and can't be assumed "done" the
+ * instant this call returns. */
+function switchModel(direction) {
+  loadBuiltinModel(modelIndex + direction);
 }
 
 // -- ambient orbiting rings, the "Jarvis" signature element --
@@ -299,6 +442,7 @@ const ringGroup = new THREE.Group();
 scene.add(ringGroup);
 
 loadBuiltinModel(0);
+restoreModelFromSession();
 
 // ---------------------------------------------------------------------------
 // Particle burst ("ping")
@@ -346,22 +490,9 @@ function updateParticles(now) {
 }
 
 // ---------------------------------------------------------------------------
-// GLTF / 3MF / OBJ / FBX / STL / PLY drag-and-drop loading
+// Drag-and-drop file loading (loaders themselves declared earlier, above
+// MODEL_DEFS, so a bundled async built-in model never risks a TDZ issue)
 // ---------------------------------------------------------------------------
-const gltfLoader = new GLTFLoader();
-// Many real-world .glb/.gltf files ship with Draco or Meshopt mesh
-// compression (common export optimizations) - without decoders wired up,
-// GLTFLoader just throws and refuses to load, which was very likely the
-// actual cause of "uploads not working."
-const dracoLoader = new DRACOLoader();
-dracoLoader.setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/");
-gltfLoader.setDRACOLoader(dracoLoader);
-gltfLoader.setMeshoptDecoder(MeshoptDecoder);
-const threeMFLoader = new ThreeMFLoader();
-const objLoader = new OBJLoader();
-const fbxLoader = new FBXLoader();
-const stlLoader = new STLLoader();
-const plyLoader = new PLYLoader();
 
 function stripEdgeChildren(root) {
   if (!root) return;
@@ -425,7 +556,11 @@ function setNativeMode(enabled) {
 }
 
 function placeCustomModel(objectOrGeometry, label, { isGeometry = false } = {}) {
-  if (currentMesh) modelGroup.remove(currentMesh);
+  if (currentMesh) {
+    modelGroup.remove(currentMesh);
+    disposeObject3D(currentMesh);
+  }
+  disposeOriginalMaterials();
   keyLight.intensity = 0;
   fillLight.intensity = 0;
   ambientLight.intensity = 0.15;
@@ -440,33 +575,10 @@ function placeCustomModel(objectOrGeometry, label, { isGeometry = false } = {}) 
     currentFresnelMaterials = [obj.children[0].material];
   } else {
     obj = objectOrGeometry;
-    // capture original materials BEFORE the hologram skin overwrites them,
-    // so peace-hold can toggle back to them later
-    currentOriginalMaterials = new Map();
-    obj.traverse((child) => { if (child.isMesh) currentOriginalMaterials.set(child, child.material); });
-
-    const skin = applyHologramSkin(obj);
-    currentFresnelMaterials = skin.materials;
-    if (!skin.addedEdges) {
-      toast(`${label}: high detail — wireframe skipped for performance`);
-    }
+    skinAndCaptureOriginals(obj, label);
   }
 
-  const box = new THREE.Box3().setFromObject(obj);
-  const size = new THREE.Vector3();
-  box.getSize(size);
-  const rawMax = Math.max(size.x, size.y, size.z);
-  if (!isFinite(rawMax) || rawMax <= 0) {
-    toast(`${label}: loaded but appears to contain no visible geometry`);
-  }
-  const maxDim = isFinite(rawMax) && rawMax > 0 ? rawMax : 1;
-  const scale = 2.2 / maxDim;
-  obj.scale.setScalar(scale);
-  const center = new THREE.Vector3();
-  box.getCenter(center);
-  if (isFinite(center.x) && isFinite(center.y) && isFinite(center.z)) {
-    obj.position.sub(center.multiplyScalar(scale));
-  }
+  normalizeAndCenter(obj, label);
 
   currentMesh = obj;
   modelGroup.add(currentMesh);
@@ -485,6 +597,100 @@ function reportLoadError(label, err) {
   console.error(`[HOLOLAB] Failed to load ${label}:`, err);
 }
 
+/** Parses already-read model data (text or ArrayBuffer) and places it in the
+ * scene. Shared by the live drag-and-drop path and the session-restore path
+ * below, since both end up with raw data for a known extension. */
+function parseAndPlaceModel(ext, data, name) {
+  try {
+    if (ext === "obj") {
+      placeCustomModel(objLoader.parse(data), name);
+    } else if (ext === "gltf" || ext === "glb") {
+      gltfLoader.parse(data, "", (gltf) => placeCustomModel(gltf.scene, name),
+        (err) => reportLoadError(name, err));
+    } else if (ext === "3mf") {
+      placeCustomModel(threeMFLoader.parse(data), name);
+    } else if (ext === "fbx") {
+      placeCustomModel(fbxLoader.parse(data, ""), name);
+    } else if (ext === "stl") {
+      placeCustomModel(stlLoader.parse(data), name, { isGeometry: true });
+    } else if (ext === "ply") {
+      placeCustomModel(plyLoader.parse(data), name, { isGeometry: true });
+    }
+  } catch (err) {
+    if (ext === "3mf") {
+      console.warn("[HOLOLAB] 3MF parse failed. If this is a slicer PROJECT file (multi-plate, "
+        + "with embedded print settings) rather than a plain model export, try re-exporting just "
+        + "the model/mesh as .3mf, or as .obj/.stl instead.");
+    }
+    reportLoadError(name, err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Session persistence: an uploaded model survives a page refresh, and clears
+// automatically when the tab actually closes - that's sessionStorage's native
+// behavior, so it's exactly the right tool here rather than localStorage
+// (which would outlive the tab) or nothing (which loses it on any refresh).
+// ---------------------------------------------------------------------------
+const SESSION_MODEL_KEY = "hololab-session-model-v1";
+// Base64 encoding inflates size by ~33%, and sessionStorage quotas are
+// commonly only 5-10MB total - keep this well under that even after inflation.
+const MAX_SESSION_MODEL_BYTES = 4 * 1024 * 1024;
+
+function arrayBufferToBase64(buffer) {
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000; // process in chunks - avoids call-stack issues on large files
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToArrayBuffer(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function saveModelToSession(name, ext, rawData, isText) {
+  try {
+    const approxBytes = isText ? rawData.length : rawData.byteLength;
+    if (approxBytes > MAX_SESSION_MODEL_BYTES) {
+      console.warn(`[HOLOLAB] ${name} (${(approxBytes / 1e6).toFixed(1)}MB) is too large to `
+        + `persist across a refresh - you'll need to re-drop it if you reload the page.`);
+      return;
+    }
+    const dataStr = isText ? rawData : arrayBufferToBase64(rawData);
+    sessionStorage.setItem(SESSION_MODEL_KEY, JSON.stringify({ name, ext, isText, data: dataStr }));
+  } catch (err) {
+    // quota exceeded, private-browsing storage restrictions, etc. - not fatal,
+    // the model still loads fine for the current page load, it just won't
+    // survive a refresh
+    console.warn("[HOLOLAB] Could not persist uploaded model for next reload:", err);
+  }
+}
+
+function restoreModelFromSession() {
+  let raw;
+  try {
+    raw = sessionStorage.getItem(SESSION_MODEL_KEY);
+  } catch (err) {
+    return; // sessionStorage unavailable in this browser/context - just skip silently
+  }
+  if (!raw) return;
+  try {
+    const { name, ext, isText, data } = JSON.parse(raw);
+    const rawData = isText ? data : base64ToArrayBuffer(data);
+    toast(`Restoring ${name} from this session…`);
+    telemetryEl.textContent = `LOADING ${name}…`;
+    setTimeout(() => parseAndPlaceModel(ext, rawData, name), 0);
+  } catch (err) {
+    console.warn("[HOLOLAB] Could not restore the previous session's model:", err);
+  }
+}
+
 function loadDroppedFile(file) {
   const name = file.name.toLowerCase();
   const ext = name.split(".").pop();
@@ -500,58 +706,17 @@ function loadDroppedFile(file) {
   telemetryEl.textContent = `LOADING ${file.name}…`;
   const reader = new FileReader();
   reader.onerror = (err) => reportLoadError(file.name, err);
-
-  if (ext === "obj" || ext === "gltf") {
-    reader.onload = () => {
-      // defer the actual (synchronous, potentially slow) parse to the next
-      // tick so the "LOADING…" state has a chance to actually paint first,
-      // instead of the parse blocking the main thread immediately
-      setTimeout(() => {
-        try {
-          if (ext === "obj") {
-            placeCustomModel(objLoader.parse(reader.result), file.name);
-          } else {
-            // .gltf (JSON) only works here if it's self-contained (buffers/images
-            // embedded as data URIs) - a .gltf split across a separate .bin and
-            // texture files can't be resolved from a single dropped file.
-            gltfLoader.parse(reader.result, "", (gltf) => placeCustomModel(gltf.scene, file.name),
-              (err) => reportLoadError(file.name, err));
-          }
-        } catch (err) {
-          reportLoadError(file.name, err);
-        }
-      }, 0);
-    };
-    reader.readAsText(file);
-    return;
-  }
+  const isText = ext === "obj" || ext === "gltf";
 
   reader.onload = () => {
-    setTimeout(() => {
-      try {
-        if (ext === "glb") {
-          gltfLoader.parse(reader.result, "", (gltf) => placeCustomModel(gltf.scene, file.name),
-            (err) => reportLoadError(file.name, err));
-        } else if (ext === "3mf") {
-          placeCustomModel(threeMFLoader.parse(reader.result), file.name);
-        } else if (ext === "fbx") {
-          placeCustomModel(fbxLoader.parse(reader.result, ""), file.name);
-        } else if (ext === "stl") {
-          placeCustomModel(stlLoader.parse(reader.result), file.name, { isGeometry: true });
-        } else if (ext === "ply") {
-          placeCustomModel(plyLoader.parse(reader.result), file.name, { isGeometry: true });
-        }
-      } catch (err) {
-        if (ext === "3mf") {
-          console.warn("[HOLOLAB] 3MF parse failed. If this is a slicer PROJECT file (multi-plate, "
-            + "with embedded print settings) rather than a plain model export, try re-exporting just "
-            + "the model/mesh as .3mf, or as .obj/.stl instead.");
-        }
-        reportLoadError(file.name, err);
-      }
-    }, 0);
+    // defer the actual (synchronous, potentially slow) parse to the next
+    // tick so the "LOADING…" state has a chance to actually paint first,
+    // instead of the parse blocking the main thread immediately
+    setTimeout(() => parseAndPlaceModel(ext, reader.result, file.name), 0);
+    saveModelToSession(file.name, ext, reader.result, isText);
   };
-  reader.readAsArrayBuffer(file);
+  if (isText) reader.readAsText(file);
+  else reader.readAsArrayBuffer(file);
 }
 
 let dragDepth = 0;
@@ -578,6 +743,13 @@ let panVel = { x: 0, y: 0 };
 let modelScale = 1.0;
 let modelPos = { x: 0, y: 0 };
 let resetCooldownUntil = 0;
+let wearing = false;
+const WEAR_SCALE = 0.4;      // the hologram shrinks to roughly this fraction of normal size while worn
+const WEAR_FOLLOW_LERP = 0.35;
+const WEAR_DISTANCE = 5;     // distance from the camera, along the hand's sightline, the worn model sits at
+const wearRaycaster = new THREE.Raycaster();
+const wearNdc = new THREE.Vector2();
+const wearTargetVec = new THREE.Vector3();
 
 let resetTween = null; // {start, duration, fromRot:{x,y}, fromScale, fromPos:{x,y}}
 function startResetTween(full) {
@@ -615,7 +787,15 @@ async function engage() {
     camState.textContent = "REQUESTING";
     camState.className = "val val--pending";
     await handInput.init();
-    audio.init();
+    try {
+      audio.init();
+    } catch (audioErr) {
+      // audio failing to initialize should never be reported as a camera
+      // failure - just proceed without sound rather than blocking tracking
+      console.warn("[HOLOLAB] Audio failed to initialize, continuing without sound:", audioErr);
+      audio.setMuted(true);
+      updateMuteBtn();
+    }
     camState.textContent = "ONLINE";
     camState.className = "val val--good";
     trackState.textContent = "ACTIVE";
@@ -680,6 +860,11 @@ function takeScreenshot() {
 }
 screenshotBtn.addEventListener("click", takeScreenshot);
 
+function toggleCamSize() {
+  videoEl.classList.toggle("cam-large");
+}
+camSizeBtn.addEventListener("click", toggleCamSize);
+
 function toggleHelp() { helpOverlay.classList.toggle("hidden"); }
 helpBtn.addEventListener("click", toggleHelp);
 helpCloseBtn.addEventListener("click", toggleHelp);
@@ -698,13 +883,19 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "m" || e.key === "M") { audio.toggleMuted(); updateMuteBtn(); }
   else if (e.key === "c" || e.key === "C") cycleTheme(e.shiftKey ? "down" : "up");
   else if (e.key === "r" || e.key === "R") { startResetTween(false); toast("RESET"); audio.thud(); }
+  else if (e.key === "]") switchModel(1);
+  else if (e.key === "[") switchModel(-1);
+  else if (e.key === "v" || e.key === "V") toggleCamSize();
 });
 
 // ---------------------------------------------------------------------------
 // Per-frame loop
 // ---------------------------------------------------------------------------
-function mirrorLandmarks(hand) {
-  return hand.map((p) => ({ x: 1 - p.x, y: p.y, z: p.z }));
+function mirrorHand(hand) {
+  return {
+    landmarks: hand.landmarks.map((p) => ({ x: 1 - p.x, y: p.y, z: p.z })),
+    handedness: hand.handedness,
+  };
 }
 
 function updateReticles(poses) {
@@ -766,9 +957,9 @@ function animate() {
   let poses = cachedPoses;
 
   if (appState === "calibrating") {
-    const hands = handInput.landmarker ? handInput.detect().map(mirrorLandmarks) : [];
+    const hands = handInput.landmarker ? handInput.detect().map(mirrorHand) : [];
     if (hands.length > 0) {
-      const d = classifyHandPose(hands[0], CONFIG).pinchDist;
+      const d = classifyHandPose(hands[0].landmarks, CONFIG).pinchDist;
       calibMin = Math.min(calibMin, d);
       calibValue.textContent = calibMin.toFixed(3);
     }
@@ -781,8 +972,8 @@ function animate() {
     // throttle expensive ML inference independent of render rate ("no lag")
     if (nowMs - lastDetectAt >= CONFIG.DETECTION_INTERVAL_MS) {
       lastDetectAt = nowMs;
-      const hands = handInput.detect().map(mirrorLandmarks);
-      cachedPoses = hands.map((lm) => classifyHandPose(lm, CONFIG));
+      const hands = handInput.detect().map(mirrorHand);
+      cachedPoses = hands.map((h) => ({ ...classifyHandPose(h.landmarks, CONFIG), handedness: h.handedness }));
       poses = cachedPoses;
     }
 
@@ -815,10 +1006,11 @@ function animate() {
       modelPos.x = Math.max(-2.5, Math.min(2.5, modelPos.x + events.pan.dx));
       modelPos.y = Math.max(-1.5, Math.min(1.5, modelPos.y - events.pan.dy));
     }
+    if (events.twoHandRotateDelta) {
+      angularVel.x = events.twoHandRotateDelta;
+    }
     if (events.swipe) {
-      loadBuiltinModel(modelIndex + (events.swipe === "right" ? 1 : -1));
-      audio.chime();
-      toast(`MODEL: ${MODEL_DEFS[modelIndex].name}`);
+      switchModel(events.swipe === "right" ? 1 : -1);
     }
     if (events.swipeVertical) {
       toggleHud();
@@ -855,6 +1047,16 @@ function animate() {
     if (events.screenshot) {
       takeScreenshot();
     }
+    if (events.wearToggle) {
+      wearing = !wearing;
+      if (wearing) {
+        audio.chime();
+        toast("WORN — following your hand");
+      } else {
+        audio.thud();
+        toast("TAKEN OFF");
+      }
+    }
 
     if (events.mode !== lastTelemetryMode) {
       modeStateEl.textContent = events.mode.toUpperCase();
@@ -888,18 +1090,29 @@ function animate() {
     modelGroup.rotation.y += angularVel.y;
     modelGroup.rotation.x += angularVel.x;
 
-    const isRotating = appState === "active" && poses.some((p) => p.pinching) && poses.length === 1;
-    const isPanning = appState === "active" && poses.filter((p) => p.pinching).length === 2;
+    const singleHandRotating = appState === "active" && poses.some((p) => p.pinching) && poses.length === 1;
+    const twoHandActive = appState === "active" && poses.filter((p) => p.pinching).length === 2;
+    const isPanning = twoHandActive;
 
-    if (!isRotating) {
-      angularVel.x *= CONFIG.INERTIA_DAMPING;
+    // Y-axis (turntable spin) is only ever actively driven by single-hand
+    // rotate, so it damps whenever that's not happening.
+    if (!singleHandRotating) {
       angularVel.y *= CONFIG.INERTIA_DAMPING;
-      if (Math.hypot(angularVel.x, angularVel.y) < CONFIG.INERTIA_MIN_VELOCITY) angularVel = { x: 0, y: 0 };
+      if (Math.abs(angularVel.y) < CONFIG.INERTIA_MIN_VELOCITY) angularVel.y = 0;
+    }
+    // X-axis (pitch/tumble) can be driven by EITHER single-hand rotate OR the
+    // two-hand steering-wheel gesture - damping must skip both, or the
+    // steering gesture would fight its own damping on the very same frame
+    // it's being applied.
+    if (!singleHandRotating && !twoHandActive) {
+      angularVel.x *= CONFIG.INERTIA_DAMPING;
+      if (Math.abs(angularVel.x) < CONFIG.INERTIA_MIN_VELOCITY) angularVel.x = 0;
+    }
 
-      // idle ambient auto-rotate once no hand has been seen for a while
-      if (appState === "active" && now - lastHandSeenAt > CONFIG.IDLE_AUTO_ROTATE_DELAY && Math.hypot(angularVel.x, angularVel.y) < CONFIG.INERTIA_MIN_VELOCITY * 2) {
-        modelGroup.rotation.y += CONFIG.IDLE_AUTO_ROTATE_SPEED;
-      }
+    // idle ambient auto-rotate once no hand has been seen for a while
+    // (suppressed while worn - it's anchored to your hand, not floating)
+    if (appState === "active" && !wearing && now - lastHandSeenAt > CONFIG.IDLE_AUTO_ROTATE_DELAY && Math.hypot(angularVel.x, angularVel.y) < CONFIG.INERTIA_MIN_VELOCITY * 2) {
+      modelGroup.rotation.y += CONFIG.IDLE_AUTO_ROTATE_SPEED;
     }
 
     if (!isPanning) {
@@ -911,9 +1124,21 @@ function animate() {
     }
   }
 
-  modelGroup.scale.setScalar(modelScale);
-  modelGroup.position.x += (modelPos.x - modelGroup.position.x) * 0.25;
-  modelGroup.position.y += (modelPos.y - modelGroup.position.y) * 0.25;
+  if (wearing && poses[0]) {
+    // "wearing" the hologram: it follows your hand's position, projected
+    // into 3D along the camera's sightline through that screen point,
+    // instead of drifting back toward the normal floating spot.
+    const hand = poses[0];
+    wearNdc.set(hand.center.x * 2 - 1, -(hand.center.y * 2 - 1));
+    wearRaycaster.setFromCamera(wearNdc, camera);
+    const target = wearRaycaster.ray.at(WEAR_DISTANCE, wearTargetVec);
+    modelGroup.position.lerp(target, WEAR_FOLLOW_LERP);
+    modelGroup.scale.setScalar(modelScale * WEAR_SCALE);
+  } else {
+    modelGroup.scale.setScalar(modelScale);
+    modelGroup.position.x += (modelPos.x - modelGroup.position.x) * 0.25;
+    modelGroup.position.y += (modelPos.y - modelGroup.position.y) * 0.25;
+  }
 
   updateParticles(now);
 

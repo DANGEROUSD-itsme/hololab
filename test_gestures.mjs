@@ -419,4 +419,130 @@ console.log(failures === 0 ? "\nALL TESTS PASSED (v4)" : `\n${failures} TEST(S) 
 }
 
 console.log(failures === 0 ? "\nALL TESTS PASSED (v5)" : `\n${failures} TEST(S) FAILED (v5)`);
+
+// ---------- hand-identity stability (the "reordering" bug) ----------
+{
+  // Two hands present, tracked at fixed array slots by handedness - if hand
+  // order swaps between frames (which MediaPipe doesn't guarantee against),
+  // pinch hysteresis keyed by identity should stay attached to the correct
+  // physical hand instead of leaking onto whichever hand is now at that
+  // array index.
+  const engine = new GestureEngine(CONFIG);
+  const engageDist = CONFIG.PINCH_THRESHOLD * CONFIG.PINCH_ENGAGE_RATIO;
+
+  const leftPinching = { pinching: false, pinchDist: engageDist * 0.5, openPalm: false, fist: false,
+    peace: false, rock: false, shaka: false, threeFinger: false,
+    center: { x: 0.3, y: 0.5 }, pinchPoint: { x: 0.3, y: 0.5 }, scale: 0.15, handedness: "Left" };
+  const rightIdle = { pinching: false, pinchDist: 0.5, openPalm: false, fist: false,
+    peace: false, rock: false, shaka: false, threeFinger: false,
+    center: { x: 0.7, y: 0.5 }, pinchPoint: { x: 0.7, y: 0.5 }, scale: 0.15, handedness: "Right" };
+
+  // frame 1: [left(pinching), right(idle)] - left engages a pinch
+  engine.update([{ ...leftPinching }, { ...rightIdle }], 0.0);
+
+  // frame 2: ARRAY ORDER SWAPS (right now reported first) - left hand moves
+  // slightly (still within hysteresis release band) but should STILL read
+  // as pinching, because identity (not array slot) drives the hysteresis.
+  const midBand = (engageDist + CONFIG.PINCH_THRESHOLD) / 2;
+  const leftStillHeld = { ...leftPinching, pinchDist: midBand };
+  engine.update([{ ...rightIdle }, leftStillHeld], 0.05);
+  check("left hand's pinch state survives an array-order swap (identity-keyed)", leftStillHeld.pinching === true);
+}
+
+console.log(failures === 0 ? "\nALL TESTS PASSED (v6)" : `\n${failures} TEST(S) FAILED (v6)`);
+
+// ---------- wear toggle (still open palm, distinct from fast-swipe open palm) ----------
+{
+  const engine = new GestureEngine(CONFIG);
+  let fired = false;
+  for (let i = 0; i < 20; i++) {
+    const hand = makeHand({ indexExt: true, middleExt: true, ringExt: true, pinkyExt: true, wristX: 0.5 });
+    const ev = engine.update([classifyHandPose(hand)], i * 0.1);
+    if (ev.wearToggle) fired = true;
+  }
+  check("holding an open palm still fires wearToggle", fired === true);
+}
+{
+  // a fast-moving open palm (i.e. an actual swipe) must NOT also fire wearToggle
+  const engine = new GestureEngine(CONFIG);
+  let wearFired = false, swipeFired = false;
+  for (let i = 0; i < 6; i++) {
+    const hand = makeHand({ indexExt: true, middleExt: true, ringExt: true, pinkyExt: true, wristX: 0.2 + i * 0.15 });
+    const ev = engine.update([classifyHandPose(hand)], i * 0.03);
+    if (ev.wearToggle) wearFired = true;
+    if (ev.swipe) swipeFired = true;
+  }
+  check("a fast swiping open palm fires swipe, not wearToggle", swipeFired === true && wearFired === false);
+}
+{
+  // two hands visible - wear toggle should not fire (single-hand-only gate)
+  const engine = new GestureEngine(CONFIG);
+  let fired = false;
+  for (let i = 0; i < 20; i++) {
+    const left = makeHand({ indexExt: true, middleExt: true, ringExt: true, pinkyExt: true, wristX: 0.3 });
+    const right = makeHand({ indexExt: true, middleExt: true, ringExt: true, pinkyExt: true, wristX: 0.7 });
+    const ev = engine.update([classifyHandPose(left), classifyHandPose(right)], i * 0.1);
+    if (ev.wearToggle) fired = true;
+  }
+  check("wearToggle does not fire with two hands visible", fired === false);
+}
+
+console.log(failures === 0 ? "\nALL TESTS PASSED (v7)" : `\n${failures} TEST(S) FAILED (v7)`);
+
+// ---------- two-hand "steering wheel" rotate ----------
+{
+  // left hand rises, right hand falls - a "turn forward" motion
+  const engine = new GestureEngine(CONFIG);
+  let left = { pinching: true, pinchDist: 0.05, openPalm: false, fist: false,
+    peace: false, rock: false, shaka: false, threeFinger: false,
+    center: { x: 0.3, y: 0.5 }, pinchPoint: { x: 0.3, y: 0.5 }, scale: 0.15, handedness: "Left" };
+  let right = { pinching: true, pinchDist: 0.05, openPalm: false, fist: false,
+    peace: false, rock: false, shaka: false, threeFinger: false,
+    center: { x: 0.7, y: 0.5 }, pinchPoint: { x: 0.7, y: 0.5 }, scale: 0.15, handedness: "Right" };
+  engine.update([left, right], 0.0);
+
+  left = { ...left, pinchPoint: { x: 0.3, y: 0.35 } };   // left hand rises
+  right = { ...right, pinchPoint: { x: 0.7, y: 0.65 } }; // right hand falls
+  const ev = engine.update([left, right], 0.05);
+  check("two-hand steering motion produces a twoHandRotateDelta", ev.twoHandRotateDelta !== null);
+  check("twoHandRotateDelta has a consistent sign for this motion", ev.twoHandRotateDelta > 0);
+}
+{
+  // Same physical motion as above, but the array order is SWAPPED between
+  // frames (right hand reported first this time) - the delta's sign must
+  // stay the same, since it's the same real-world hand motion.
+  const engine = new GestureEngine(CONFIG);
+  let left = { pinching: true, pinchDist: 0.05, openPalm: false, fist: false,
+    peace: false, rock: false, shaka: false, threeFinger: false,
+    center: { x: 0.3, y: 0.5 }, pinchPoint: { x: 0.3, y: 0.5 }, scale: 0.15, handedness: "Left" };
+  let right = { pinching: true, pinchDist: 0.05, openPalm: false, fist: false,
+    peace: false, rock: false, shaka: false, threeFinger: false,
+    center: { x: 0.7, y: 0.5 }, pinchPoint: { x: 0.7, y: 0.5 }, scale: 0.15, handedness: "Right" };
+  engine.update([left, right], 0.0); // frame 1: [left, right]
+
+  left = { ...left, pinchPoint: { x: 0.3, y: 0.35 } };
+  right = { ...right, pinchPoint: { x: 0.7, y: 0.65 } };
+  // frame 2: order swapped to [right, left] - same physical hands, same motion
+  const ev = engine.update([right, left], 0.05);
+  check("hand-order swap between frames does not flip rotate direction", ev.twoHandRotateDelta > 0);
+}
+{
+  // without handedness (as in most of the tests above, and real single-hand-
+  // only scenarios), scale/pan continue to work exactly as before - this
+  // guards against the stable-ordering change breaking the un-labeled case.
+  const engine = new GestureEngine(CONFIG);
+  let a = { pinching: true, pinchDist: 0.05, openPalm: false, fist: false,
+    peace: false, rock: false, shaka: false, threeFinger: false,
+    center: { x: 0.3, y: 0.5 }, pinchPoint: { x: 0.3, y: 0.5 }, scale: 0.15 };
+  let b = { pinching: true, pinchDist: 0.05, openPalm: false, fist: false,
+    peace: false, rock: false, shaka: false, threeFinger: false,
+    center: { x: 0.7, y: 0.5 }, pinchPoint: { x: 0.7, y: 0.5 }, scale: 0.15 };
+  engine.update([a, b], 0.0);
+  a = { ...a, pinchPoint: { x: 0.2, y: 0.5 } };
+  b = { ...b, pinchPoint: { x: 0.8, y: 0.5 } };
+  const ev = engine.update([a, b], 0.05);
+  check("scale still works without handedness data", ev.scale > 1.0);
+}
+
+console.log(failures === 0 ? "\nALL TESTS PASSED (v8)" : `\n${failures} TEST(S) FAILED (v8)`);
 process.exit(failures === 0 ? 0 : 1);

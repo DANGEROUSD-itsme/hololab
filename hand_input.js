@@ -38,9 +38,13 @@ export class HandInput {
   }
 
   /**
-   * Call once per animation frame. Returns an array of hands, each an
-   * array of 21 {x, y, z} normalized points, in image (mirrored) space.
-   * Returns [] if no hands detected or video isn't ready yet.
+   * Call once per animation frame. Returns an array of hands, each
+   * { landmarks: [21 {x,y,z} points], handedness: "Left"|"Right"|null },
+   * in image (mirrored) space. Returns [] if no hands detected or video
+   * isn't ready yet. Handedness is included so callers can key any
+   * per-hand state by hand identity rather than array position - MediaPipe
+   * doesn't guarantee the same physical hand stays at the same array index
+   * frame-to-frame when two hands are visible.
    */
   detect() {
     if (!this.landmarker || this.video.readyState < 2) return [];
@@ -48,9 +52,12 @@ export class HandInput {
     this._lastVideoTime = this.video.currentTime;
 
     const result = this.landmarker.detectForVideo(this.video, performance.now());
-    this._lastResult = (result.landmarks || []).map((hand) =>
-      hand.map((p) => ({ x: p.x, y: p.y, z: p.z }))
-    );
+    const landmarksList = result.landmarks || [];
+    const handednessList = result.handednesses || [];
+    this._lastResult = landmarksList.map((hand, i) => ({
+      landmarks: hand.map((p) => ({ x: p.x, y: p.y, z: p.z })),
+      handedness: handednessList[i]?.[0]?.categoryName || null,
+    }));
     return this._lastResult;
   }
 }

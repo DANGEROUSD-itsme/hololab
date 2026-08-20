@@ -50,6 +50,7 @@
       <div class="row"><span>pinch + move</span><span class="dim">rotate</span></div>
       <div class="row"><span>2-hand pinch, spread</span><span class="dim">scale</span></div>
       <div class="row"><span>2-hand pinch, shift</span><span class="dim">pan</span></div>
+      <div class="row"><span>2-hand pinch, steer</span><span class="dim">tumble forward/back</span></div>
       <div class="row"><span>quick double-pinch</span><span class="dim">ping burst</span></div>
       <div class="row"><span>open palm, swipe ↔</span><span class="dim">next/prev model</span></div>
       <div class="row"><span>open palm, swipe ↕</span><span class="dim">toggle HUD</span></div>
@@ -57,6 +58,7 @@
       <div class="row"><span>rock 🤟, tap</span><span class="dim">fullscreen</span></div>
       <div class="row"><span>shaka 🤙, tap</span><span class="dim">mute</span></div>
       <div class="row"><span>3 fingers, hold</span><span class="dim">screenshot</span></div>
+      <div class="row"><span>open palm, hold ~0.6s</span><span class="dim">wear / take off</span></div>
       <div class="row"><span>fist</span><span class="dim">grab — stops instantly</span></div>
       <div class="row"><span>hold 1 fist ~0.7s</span><span class="dim">reset view</span></div>
       <div class="row"><span>hold 2 fists ~0.7s</span><span class="dim">full reset</span></div>
@@ -73,6 +75,7 @@
     <div class="toolbar">
       <button id="muteBtn" class="tool-btn" title="Toggle ambient sound">🔊</button>
       <button id="fullscreenBtn" class="tool-btn" title="Toggle fullscreen">⛶</button>
+      <button id="camSizeBtn" class="tool-btn" title="Enlarge/shrink camera preview (V)">🔍</button>
       <button id="screenshotBtn" class="tool-btn" title="Save a screenshot (S)">📷</button>
       <button id="helpBtn" class="tool-btn" title="Show all controls (?)">?</button>
     </div>
@@ -114,6 +117,7 @@
             <div class="row"><span>Pinch (1 hand) + move</span><span class="dim">rotate</span></div>
             <div class="row"><span>Pinch (2 hands), spread</span><span class="dim">scale</span></div>
             <div class="row"><span>Pinch (2 hands), shift</span><span class="dim">pan</span></div>
+            <div class="row"><span>Pinch (2 hands), one rises/one falls</span><span class="dim">tumble forward/back (steering-wheel motion)</span></div>
             <div class="row"><span>Quick double-pinch</span><span class="dim">ping burst</span></div>
             <div class="row"><span>Open palm, swipe left/right</span><span class="dim">next/prev model</span></div>
             <div class="row"><span>Open palm, swipe up/down</span><span class="dim">toggle HUD panels</span></div>
@@ -121,6 +125,7 @@
             <div class="row"><span>Rock sign 🤟 (index+pinky), tap</span><span class="dim">toggle fullscreen</span></div>
             <div class="row"><span>Shaka 🤙 (thumb+pinky), tap</span><span class="dim">toggle mute</span></div>
             <div class="row"><span>3 fingers (index+middle+ring), held ~0.6s</span><span class="dim">save screenshot</span></div>
+            <div class="row"><span>Open palm, held still ~0.6s</span><span class="dim">wear the hologram on your hand / take it off</span></div>
             <div class="row"><span>Fist (either hand)</span><span class="dim">grab — instantly stops all motion</span></div>
             <div class="row"><span>Hold 1 fist (~0.7s)</span><span class="dim">reset view</span></div>
             <div class="row"><span>Hold 2 fists (~0.7s)</span><span class="dim">full reset (view + color + model)</span></div>
@@ -140,6 +145,9 @@
             <div class="row"><span>M</span><span class="dim">toggle sound</span></div>
             <div class="row"><span>C</span><span class="dim">next color theme</span></div>
             <div class="row"><span>Shift+C</span><span class="dim">previous color theme</span></div>
+            <div class="row"><span>]</span><span class="dim">next model</span></div>
+            <div class="row"><span>[</span><span class="dim">previous model</span></div>
+            <div class="row"><span>V</span><span class="dim">enlarge / shrink camera preview</span></div>
             <div class="row"><span>R</span><span class="dim">reset view</span></div>
           </div>
         </div>
