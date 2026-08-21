@@ -41,7 +41,7 @@ need to do this once.
 | Rock sign 🤟 (index+pinky), tap | Toggle fullscreen |
 | Shaka 🤙 (thumb+pinky), tap | Toggle mute |
 | Three fingers (index+middle+ring), held ~0.6s | Save screenshot |
-| Open palm, held still ~0.6s | Wear the hologram on your hand (it follows your hand) / take it off |
+| Open palm, held still ~0.6s | Wear the hologram on your hand — switches to AR: camera fills the screen, model overlays your hand in the live video / take it off to return to the floating hologram view |
 | Fist (either hand) | Instantly stops all rotation/pan — like grabbing the hologram to still it |
 | Fist, held ~0.7s | Reset view (rotation/scale/pan) |
 | Both hands as fists, held ~0.7s | Full reset — view, color, and model all back to default |
@@ -65,6 +65,16 @@ need to do this once.
 The toolbar top-right (🔊 ⛶ 🔍 📷 ?) does the same things with clicks.
 
 ## What's new in this pass
+
+**Worn mode now tracks your hand's actual rotation, not just its position**
+- Turn your wrist any direction — roll, tilt, twist — and the model turns with it, instead of just floating near your hand while facing a fixed direction. This estimates a full 3D orientation from your hand's landmarks (using the wrist and the index/middle/pinky knuckles as a rigid reference frame), not just a single tilt angle.
+- Validated the math directly rather than trusting it blind: rotated a synthetic hand by a known amount around each of the three axes (roll, pitch, yaw) and confirmed the computed orientation rotates by that *exact* same amount every time — that's the actual property that matters ("the output tracks the input"), and it held on all three axes.
+- Also tightened the responsiveness for fast movement — both position and rotation tracking are noticeably snappier now, closer to something actually strapped to your wrist than a laggy floating follower.
+
+**Wearing it is now real AR, not a disconnected preview**
+- Previously, "worn" mode floated the model in the abstract 3D scene while the actual camera feed stayed a tiny, unrelated corner thumbnail — there was no real spatial link between where your hand appeared on your screen and where the model showed up. Now, the moment you put it on, the camera feed becomes the full-screen background and the 3D scene renders transparently on top of it, so the model genuinely overlays your hand in the live video — the grid floor and ambient rings hide themselves too, since they'd look out of place over a real camera feed.
+- Fixed the alignment math to go with it: your camera likely captures a different aspect ratio than your screen, so the visible video gets cropped to fill the screen (same as any `object-fit: cover` image). Hand tracking runs on the *full, uncropped* frame, so without correcting for that crop, the model would drift away from your actual hand anywhere but dead-center. The hand-to-screen mapping now accounts for this the same way the video's own cropping does — validated with worked-through numeric test cases (crop margins, the exact edges of the visible window, both landscape and portrait aspect combinations) since I can't test this against a real camera myself.
+- Take it off (hold an open palm still again) and everything reverts — camera preview back to its normal size, grid and rings back, scene opaque again.
 
 **Two-hand "steering wheel" tumble**
 - Pinch with both hands, then move one up while the other moves down (like turning a big invisible steering wheel toward you). The model tumbles forward/backward to match. This works alongside scale and pan in the same two-hand-pinch gesture — spread/shift/steer are all independent and can be combined fluidly, like handling a real object with both hands.
@@ -164,7 +174,7 @@ The toolbar top-right (🔊 ⛶ 🔍 📷 ?) does the same things with clicks.
 ## Architecture
 
 - `gestures.js` — pure gesture math and the `GestureEngine` state machine (every pose classification and event: rotate, scale, pan, swipe (both axes), reset, full reset, color cycle, ping). No Three.js or MediaPipe imports, so it's fully unit-testable.
-- `test_gestures.mjs` — Node test suite, 55 checks across every gesture, pose classification, hysteresis, jitter-tolerance, stillness-gating, and hand-identity stability. Run with `node test_gestures.mjs`.
+- `test_gestures.mjs` — Node test suite, 58 checks across every gesture, pose classification, hysteresis, jitter-tolerance, stillness-gating, hand-identity stability, and orientation tracking. Run with `node test_gestures.mjs`.
 - `hand_input.js` — thin wrapper around MediaPipe Tasks Vision (`HandLandmarker`) and `getUserMedia`.
 - `audio.js` — `HoloAudio` class: ambient hum + short WebAudio-synthesized cues, single mute switch.
 - `main.js` — Three.js scene (holographic fresnel material, bloom, ambient rings, particle system), the six file-format loaders, the color theme system, calibration/help/toolbar wiring, and the per-frame loop that ties gesture events to the 3D transform.
@@ -178,6 +188,9 @@ The toolbar top-right (🔊 ⛶ 🔍 📷 ?) does the same things with clicks.
 - **Add a file format**: three.js ships loaders for most formats under `three/addons/loaders/` — follow the pattern of the existing six in `loadDroppedFile()`.
 
 ## Troubleshooting
+
+- **Worn model doesn't quite sit on your hand, or rotation feels laggy**: `WEAR_FOLLOW_LERP` and `WEAR_ROTATE_SLERP` near the top of `main.js` control how quickly position and rotation catch up to your hand — raise either for snappier tracking. If it's consistently offset in one direction rather than lagging, that's more likely a camera resolution/aspect mismatch than a lerp issue — check what resolution `hand_input.js` requests (`640x480` by default) against your actual webcam and screen.
+- **Worn model's rotation looks wrong/flipped**: the orientation estimate is built from the wrist and index/middle/pinky knuckles, and assumes those are visible and roughly in their normal relative positions — a fist or a hand mostly out of frame won't give it much to work with. This is a visual approximation (MediaPipe's depth data is noisy), not precision tracking, so some jitter or imperfect alignment at extreme angles is expected.
 
 - **Things trigger just from raising/moving my hand**: lower `HOLD_STILLNESS_MAX_VELOCITY` in `config.js` — your hand may be moving slower than the default threshold expects during the motion you're doing.
 

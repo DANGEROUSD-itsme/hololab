@@ -108,9 +108,10 @@ updateMuteBtn();
 // ---------------------------------------------------------------------------
 // Three.js scene
 // ---------------------------------------------------------------------------
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, powerPreference: "high-performance" });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, powerPreference: "high-performance", alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x050a12, 1); // opaque void by default; goes transparent in AR (wear) mode
 
 const scene = new THREE.Scene();
 let fogRef = new THREE.FogExp2(0x050a12, 0.045);
@@ -745,11 +746,64 @@ let modelPos = { x: 0, y: 0 };
 let resetCooldownUntil = 0;
 let wearing = false;
 const WEAR_SCALE = 0.4;      // the hologram shrinks to roughly this fraction of normal size while worn
-const WEAR_FOLLOW_LERP = 0.35;
+const WEAR_FOLLOW_LERP = 0.6;   // higher = snappier tracking, closer to "actually strapped to your wrist"
+const WEAR_ROTATE_SLERP = 0.55; // same idea, for orientation tracking
 const WEAR_DISTANCE = 5;     // distance from the camera, along the hand's sightline, the worn model sits at
 const wearRaycaster = new THREE.Raycaster();
 const wearNdc = new THREE.Vector2();
 const wearTargetVec = new THREE.Vector3();
+const wearBasisMatrix = new THREE.Matrix4();
+const wearTargetQuat = new THREE.Quaternion();
+const wearRightVec = new THREE.Vector3();
+const wearUpVec = new THREE.Vector3();
+const wearForwardVec = new THREE.Vector3();
+
+/**
+ * Switches between the normal "floating hologram lab" look and true AR mode:
+ * the camera feed becomes the full-screen background and the (now
+ * transparent) 3D canvas draws the model directly on top of it, so the
+ * hologram visually sits on your actual hand in the live video instead of
+ * floating in the abstract void scene with the camera as an unrelated
+ * corner thumbnail.
+ */
+function setArMode(enabled) {
+  videoEl.classList.toggle("ar-active", enabled);
+  renderer.setClearColor(0x050a12, enabled ? 0 : 1);
+  scene.fog = enabled ? null : fogRef;
+  grid.visible = !enabled;
+  ringGroup.visible = !enabled;
+}
+
+/**
+ * Converts a hand's normalized position (0-1, relative to the FULL captured
+ * camera frame) into NDC (-1 to 1) screen coordinates, correctly accounting
+ * for the fact that the displayed video is cropped to fill the viewport
+ * (CSS object-fit: cover) whenever the aspect ratios don't match. Without
+ * this, hand tracking (based on the full, uncropped frame) and the visible
+ * video (cropped) disagree about where "the edge" is, and the worn model
+ * drifts away from your actual hand as soon as the camera and screen aspect
+ * ratios differ.
+ */
+function handNormToScreenNdc(nx, ny) {
+  const videoAspect = (videoEl.videoWidth && videoEl.videoHeight)
+    ? videoEl.videoWidth / videoEl.videoHeight
+    : 4 / 3; // matches the getUserMedia request in hand_input.js
+  const viewportAspect = window.innerWidth / window.innerHeight;
+
+  let u = nx, v = ny;
+  if (viewportAspect > videoAspect) {
+    // viewport wider than the video -> top/bottom of the frame is cropped off
+    const visibleFraction = videoAspect / viewportAspect;
+    const cropMargin = (1 - visibleFraction) / 2;
+    v = (ny - cropMargin) / visibleFraction;
+  } else {
+    // viewport narrower than the video -> left/right of the frame is cropped off
+    const visibleFraction = viewportAspect / videoAspect;
+    const cropMargin = (1 - visibleFraction) / 2;
+    u = (nx - cropMargin) / visibleFraction;
+  }
+  return { x: u * 2 - 1, y: -(v * 2 - 1) };
+}
 
 let resetTween = null; // {start, duration, fromRot:{x,y}, fromScale, fromPos:{x,y}}
 function startResetTween(full) {
@@ -1049,6 +1103,7 @@ function animate() {
     }
     if (events.wearToggle) {
       wearing = !wearing;
+      setArMode(wearing);
       if (wearing) {
         audio.chime();
         toast("WORN — following your hand");
@@ -1086,9 +1141,12 @@ function animate() {
     modelPos.y = resetTween.fromPos.y * (1 - e);
     if (t >= 1) resetTween = null;
   } else {
-    // active/inertial rotation
-    modelGroup.rotation.y += angularVel.y;
-    modelGroup.rotation.x += angularVel.x;
+    // active/inertial rotation (skipped while worn - orientation there is
+    // fully driven by the hand-tracked quaternion further down instead)
+    if (!wearing) {
+      modelGroup.rotation.y += angularVel.y;
+      modelGroup.rotation.x += angularVel.x;
+    }
 
     const singleHandRotating = appState === "active" && poses.some((p) => p.pinching) && poses.length === 1;
     const twoHandActive = appState === "active" && poses.filter((p) => p.pinching).length === 2;
@@ -1125,15 +1183,28 @@ function animate() {
   }
 
   if (wearing && poses[0]) {
-    // "wearing" the hologram: it follows your hand's position, projected
-    // into 3D along the camera's sightline through that screen point,
-    // instead of drifting back toward the normal floating spot.
+    // "wearing" the hologram: it follows your hand's position, mapped
+    // through the same crop the visible AR background video actually uses,
+    // then projected into 3D along that screen point's sightline - so it
+    // lands on your hand as you actually see it, not an uncorrected guess.
     const hand = poses[0];
-    wearNdc.set(hand.center.x * 2 - 1, -(hand.center.y * 2 - 1));
+    const ndc = handNormToScreenNdc(hand.center.x, hand.center.y);
+    wearNdc.set(ndc.x, ndc.y);
     wearRaycaster.setFromCamera(wearNdc, camera);
     const target = wearRaycaster.ray.at(WEAR_DISTANCE, wearTargetVec);
     modelGroup.position.lerp(target, WEAR_FOLLOW_LERP);
     modelGroup.scale.setScalar(modelScale * WEAR_SCALE);
+
+    // orientation: track the hand's actual roll/pitch/yaw, so it looks
+    // genuinely strapped to your wrist and turns with it, not just a shape
+    // that happens to hover near your hand's position.
+    const o = hand.orientation;
+    wearRightVec.set(o.right.x, o.right.y, o.right.z);
+    wearUpVec.set(o.up.x, o.up.y, o.up.z);
+    wearForwardVec.set(o.forward.x, o.forward.y, o.forward.z);
+    wearBasisMatrix.makeBasis(wearRightVec, wearUpVec, wearForwardVec);
+    wearTargetQuat.setFromRotationMatrix(wearBasisMatrix);
+    modelGroup.quaternion.slerp(wearTargetQuat, WEAR_ROTATE_SLERP);
   } else {
     modelGroup.scale.setScalar(modelScale);
     modelGroup.position.x += (modelPos.x - modelGroup.position.x) * 0.25;

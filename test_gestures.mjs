@@ -545,4 +545,49 @@ console.log(failures === 0 ? "\nALL TESTS PASSED (v7)" : `\n${failures} TEST(S) 
 }
 
 console.log(failures === 0 ? "\nALL TESTS PASSED (v8)" : `\n${failures} TEST(S) FAILED (v8)`);
+
+// ---------- hand orientation basis (used for AR "wear" rotation tracking) ----------
+{
+  // A neutral hand facing the camera should produce a clean, orthonormal
+  // right/up/forward basis aligned with the obvious axes.
+  const lm = new Array(21).fill(null).map(() => ({ x: 0.5, y: 0.5, z: 0 }));
+  lm[0] = { x: 0.5, y: 0.5, z: 0 };   // wrist
+  lm[5] = { x: 0.45, y: 0.4, z: 0 };  // index MCP
+  lm[9] = { x: 0.5, y: 0.35, z: 0 };  // middle MCP
+  lm[17] = { x: 0.55, y: 0.4, z: 0 }; // pinky MCP
+  const { orientation } = classifyHandPose(lm);
+  const mag = (v) => Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+  const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+  check("orientation basis vectors are unit length",
+    Math.abs(mag(orientation.up) - 1) < 0.01 && Math.abs(mag(orientation.right) - 1) < 0.01 && Math.abs(mag(orientation.forward) - 1) < 0.01);
+  check("orientation basis vectors are mutually orthogonal",
+    Math.abs(dot(orientation.up, orientation.right)) < 0.01 &&
+    Math.abs(dot(orientation.up, orientation.forward)) < 0.01 &&
+    Math.abs(dot(orientation.right, orientation.forward)) < 0.01);
+}
+{
+  // Rotating the physical hand by a known transform should rotate the
+  // computed basis by that exact same transform - that's what "the model
+  // tracks your hand's actual rotation" requires.
+  function rotZ90(p) { return { x: -p.y, y: p.x, z: p.z || 0 }; }
+  function makeHand(rotFn) {
+    const wrist0 = { x: 0, y: 0, z: 0 }, middle0 = { x: 0, y: 0.15, z: 0 };
+    const index0 = { x: -0.05, y: 0.1, z: 0 }, pinky0 = { x: 0.05, y: 0.1, z: 0 };
+    const toImg = (p) => ({ x: 0.5 + p.x, y: 0.5 - p.y, z: p.z });
+    const lm = new Array(21).fill(null).map(() => ({ x: 0.5, y: 0.5, z: 0 }));
+    lm[0] = toImg(rotFn(wrist0));
+    lm[5] = toImg(rotFn(index0));
+    lm[9] = toImg(rotFn(middle0));
+    lm[17] = toImg(rotFn(pinky0));
+    return lm;
+  }
+  const neutral = classifyHandPose(makeHand((p) => p)).orientation;
+  const rolled = classifyHandPose(makeHand(rotZ90)).orientation;
+  const expected = rotZ90(neutral.up);
+  const close = (a, b) => Math.abs(a - b) < 0.05;
+  check("rotating the hand 90° rotates the computed orientation by the same 90°",
+    close(rolled.up.x, expected.x) && close(rolled.up.y, expected.y) && close(rolled.up.z, expected.z));
+}
+
+console.log(failures === 0 ? "\nALL TESTS PASSED (v9)" : `\n${failures} TEST(S) FAILED (v9)`);
 process.exit(failures === 0 ? 0 : 1);

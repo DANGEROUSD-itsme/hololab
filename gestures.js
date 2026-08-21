@@ -61,6 +61,38 @@ function thumbExtendedCheck(lm, cfg) {
   return angleAtJoint(lm[WRIST], lm[THUMB_IP], lm[THUMB_TIP]) > cfg.THUMB_STRAIGHT_ANGLE_DEG;
 }
 
+function vSub(a, b) { return { x: a.x - b.x, y: a.y - b.y, z: (a.z || 0) - (b.z || 0) }; }
+function vCross(a, b) { return { x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x }; }
+function vNorm(v) {
+  const m = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) || 1e-9;
+  return { x: v.x / m, y: v.y / m, z: v.z / m };
+}
+
+/**
+ * Estimates the hand's 3D orientation as an orthonormal basis (right/up/forward
+ * unit vectors), from landmarks that stay reasonably rigid relative to each
+ * other regardless of which fingers are curled: the wrist and the
+ * index/middle/pinky knuckles. Y is flipped since image coordinates are
+ * y-down but a normal 3D basis is y-up. This is a rough visual estimate
+ * (MediaPipe's z is noisy, not true depth), good enough for "does the worn
+ * model look attached as your hand turns," not precision AR tracking.
+ */
+function computeHandOrientation(lm) {
+  const toV = (p) => ({ x: p.x, y: -p.y, z: p.z || 0 });
+  const wristV = toV(lm[WRIST]);
+  const indexV = toV(lm[INDEX_MCP]);
+  const middleV = toV(lm[MIDDLE_MCP]);
+  const pinkyV = toV(lm[PINKY_MCP]);
+
+  const up = vNorm(vSub(middleV, wristV));              // wrist -> middle knuckle: "along the hand"
+  const across = vSub(pinkyV, indexV);                  // index knuckle -> pinky knuckle: "across the palm"
+  let forward = vNorm(vCross(across, up));              // palm-facing normal
+  let right = vNorm(vCross(up, forward));
+  forward = vNorm(vCross(right, up));                   // re-orthogonalize after rounding
+
+  return { right, up, forward };
+}
+
 /**
  * Classifies a single hand's landmarks into the pose data the engine needs.
  * lm: array of 21 {x, y, z} normalized points (MediaPipe order).
@@ -109,6 +141,7 @@ export function classifyHandPose(lm, cfg = CONFIG) {
     center,
     pinchPoint,
     scale,
+    orientation: computeHandOrientation(lm),
   };
 }
 

@@ -24,6 +24,7 @@ html, body {
   position: fixed;
   inset: 0;
   display: block;
+  z-index: 3;
 }
 
 #cam {
@@ -40,6 +41,23 @@ html, body {
   z-index: 5;
   filter: saturate(0.6) brightness(0.9);
   transition: width 0.25s ease, height 0.25s ease, opacity 0.25s ease;
+}
+/* AR mode (while wearing the hologram): camera fills the screen as the real
+   background, and the (now-transparent) 3D canvas draws the model on top of
+   it - z-index 1 puts this BELOW #scene's z-index 3, the opposite of the
+   small-preview case above where the video sits above the scene. */
+#cam.ar-active {
+  position: fixed;
+  inset: 0;
+  bottom: auto;
+  right: auto;
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: 0;
+  opacity: 1;
+  z-index: 1;
+  filter: none;
 }
 #cam.cam-large {
   width: 480px;
